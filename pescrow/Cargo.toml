@@ -1,0 +1,20 @@
+[package]
+name = "pescrow"
+version = "0.1.0"
+edition = "2021"
+description = "Two-sided private escrow. First product. Payroll, vesting, and subscription come after."
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = []
+# Enabled only for `cargo build-sbf --features bpf-entrypoint`.
+bpf-entrypoint = ["dep:pinocchio"]
+
+[dependencies]
+pinocchio = { version = "0.12", default-features = false, optional = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
