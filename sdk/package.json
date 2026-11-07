@@ -1,0 +1,26 @@
+{
+  "name": "@pescrow/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TypeScript client for pescrow. Talks to Solana Privacy Rings through @heliuslabs/spr.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --test src/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "proofs": "node src/fetch-note-proofs.ts",
+    "deposit": "node src/deposit-and-prove.ts",
+    "lock": "node --import ./src/wasm-node-preload.mjs src/lock-into-escrow.ts",
+    "swap": "node --import ./src/wasm-node-preload.mjs src/swap-and-close.ts"
+  },
+  "dependencies": {
+    "@heliuslabs/spr": "0.9.0-alpha",
+    "@solana/kit": "^8.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3"
+  }
+}

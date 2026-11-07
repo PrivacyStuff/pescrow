@@ -24,9 +24,20 @@ pub enum EscrowError {
     PermissionlessPublishesWallets = 117,
     /// A custom ring is a real option. Create waits until that ring's program id is set.
     CustomRingUnset = 118,
+    /// The proof's public inputs are not this escrow account.
+    ProofMismatch = 119,
+    /// No verifying key has been built for this circuit. The invoke does not run.
+    ProofKeyMissing = 120,
+    /// The shielded-pool invoke failed. The seal was not written.
+    InvokeFailed = 121,
+    /// The circuit proof does not match this account.
+    ProofRejected = 123,
+    /// A sealed side has no output commitment to spend.
+    MissingCommitment = 122,
 }
 
 impl EscrowError {
+    /// Stable numeric code returned to the runtime. Do not renumber a shipped code.
     pub const fn code(self) -> u32 {
         self as u32
     }
