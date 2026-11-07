@@ -194,7 +194,10 @@ const sides = [
   { file: "party-b.json", side: 1, hash: NOTE_HASHES[1], sealAt: 5, commitAt: 128 },
 ] as const;
 
+const lockSide = process.env.LOCK_SIDE;
 for (const side of sides) {
+  if (lockSide === "a" && side.side !== 0) continue;
+  if (lockSide === "b" && side.side !== 1) continue;
   const account = await connection.getAccountInfo(escrowKey);
   if (account === null || account.data.length !== ACCOUNT_LEN) {
     throw new Error("escrow account is missing");
