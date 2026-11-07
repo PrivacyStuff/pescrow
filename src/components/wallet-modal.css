@@ -1,0 +1,33 @@
+.wallet-adapter-modal-wrapper {
+  background: var(--background);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--foreground);
+  font-family: inherit;
+}
+
+.wallet-adapter-modal-title,
+.wallet-adapter-modal-list-more,
+.wallet-adapter-modal-wrapper .wallet-adapter-button {
+  color: var(--foreground);
+  font-family: inherit;
+}
+
+.wallet-adapter-modal-wrapper .wallet-adapter-button {
+  background: transparent;
+  font-weight: 400;
+}
+
+.wallet-adapter-modal-wrapper .wallet-adapter-button:not([disabled]):hover {
+  background: rgba(26, 24, 20, 0.06);
+}
+
+.wallet-adapter-modal-button-close {
+  background: transparent;
+}
+
+.wallet-adapter-modal-button-close svg,
+.wallet-adapter-modal-list-more svg {
+  fill: var(--foreground);
+}
