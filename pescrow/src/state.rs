@@ -1,7 +1,12 @@
 use crate::error::EscrowError;
 
 pub const ESCROW_TAG: u8 = 1;
-pub const ACCOUNT_LEN: usize = 88;
+/// Layout break: 88 bytes had no bump and no note commitments. Nothing is deployed.
+/// 0 tag, 1 status, 2 a_approved, 3 b_approved, 4 a_sealed, 5 b_sealed,
+/// 6 ring, 7 wallets, 8 start, 16 deadline, 24 party_a, 56 party_b,
+/// 88 bump, 89..96 pad, 96 commitment_a, 128 commitment_b.
+pub const ACCOUNT_LEN: usize = 160;
+pub const COMMITMENT_LEN: usize = 32;
 
 const OFF_TAG: usize = 0;
 const OFF_STATUS: usize = 1;
@@ -15,6 +20,9 @@ const OFF_START: usize = 8;
 const OFF_DEADLINE: usize = 16;
 const OFF_PARTY_A: usize = 24;
 const OFF_PARTY_B: usize = 56;
+const OFF_BUMP: usize = 88;
+const OFF_COMMIT_A: usize = 96;
+const OFF_COMMIT_B: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -46,6 +54,7 @@ pub struct Escrow<'a> {
 }
 
 impl<'a> Escrow<'a> {
+    /// Rejects any buffer that is not the 160-byte account.
     pub fn load(data: &'a mut [u8]) -> Result<Self, EscrowError> {
         if data.len() != ACCOUNT_LEN {
             return Err(EscrowError::BadAccount);
@@ -53,6 +62,7 @@ impl<'a> Escrow<'a> {
         Ok(Self { data })
     }
 
+    /// Opens permissionless plus public wallets only. A second create fails.
     pub fn create(
         &mut self,
         party_a: &[u8; 32],
@@ -61,6 +71,7 @@ impl<'a> Escrow<'a> {
         approval_deadline: i64,
         ring: Ring,
         wallets: Wallets,
+        bump: u8,
     ) -> Result<(), EscrowError> {
         if self.data[OFF_TAG] != 0 {
             return Err(EscrowError::AlreadyInitialized);
@@ -86,6 +97,7 @@ impl<'a> Escrow<'a> {
         self.data[OFF_STATUS] = Status::Proposed as u8;
         self.data[OFF_RING] = ring as u8;
         self.data[OFF_WALLETS] = wallets as u8;
+        self.data[OFF_BUMP] = bump;
         self.data[OFF_START..OFF_START + 8].copy_from_slice(&start_at.to_le_bytes());
         self.data[OFF_DEADLINE..OFF_DEADLINE + 8].copy_from_slice(&approval_deadline.to_le_bytes());
         self.data[OFF_PARTY_A..OFF_PARTY_A + 32].copy_from_slice(party_a);
@@ -93,6 +105,7 @@ impl<'a> Escrow<'a> {
         Ok(())
     }
 
+    /// One party signs, once, strictly before the approval deadline and `start_at`.
     pub fn approve(&mut self, signer: &[u8; 32], now: i64) -> Result<(), EscrowError> {
         self.require_proposed(now)?;
         match self.side(signer)? {
@@ -102,6 +115,30 @@ impl<'a> Escrow<'a> {
         Ok(())
     }
 
+    /// Either party may close when no note is still locked. Rent is recovered by the entrypoint.
+    /// A `Proposed` escrow with a seal stays open. `Exchanged` and `Reclaimed` may close.
+    pub fn close_ready(&self, signer: &[u8; 32]) -> Result<(), EscrowError> {
+        if self.data[OFF_TAG] != ESCROW_TAG {
+            return Err(EscrowError::NotInitialized);
+        }
+        let _ = self.side(signer)?;
+        let status = self.data[OFF_STATUS];
+        if status == Status::Proposed as u8 {
+            if self.a_sealed() || self.b_sealed() {
+                return Err(EscrowError::Frozen);
+            }
+            return Ok(());
+        }
+        if status == Status::Void as u8
+            || status == Status::Exchanged as u8
+            || status == Status::Reclaimed as u8
+        {
+            return Ok(());
+        }
+        Err(EscrowError::BadAccount)
+    }
+
+    /// Voids the proposal. A sealed side cannot decline.
     pub fn decline(&mut self, signer: &[u8; 32], now: i64) -> Result<(), EscrowError> {
         self.require_proposed(now)?;
         if self.a_sealed() || self.b_sealed() {
@@ -112,22 +149,36 @@ impl<'a> Escrow<'a> {
         Ok(())
     }
 
-    /// Records that this side's private note is now locked. Called only after a
-    /// successful privacy-program CPI. Tests call it directly. The entrypoint
-    /// does not, until that CPI exists.
+    /// Sets the seal byte only. Does not move a note. Tests use this for the rule.
     pub fn seal_side(&mut self, signer: &[u8; 32], now: i64) -> Result<(), EscrowError> {
         let side = self.ready_side(signer, now)?;
         self.set_sealed(side);
         Ok(())
     }
 
-    /// Same checks as `seal_side`, without writing the seal. `fund_side` uses
-    /// this while the privacy-program CPI is still closed.
+    /// Writes the output commitment, then the seal. A zero commitment is rejected.
+    pub fn seal_note(
+        &mut self,
+        signer: &[u8; 32],
+        now: i64,
+        commitment: &[u8; 32],
+    ) -> Result<(), EscrowError> {
+        if commitment == &[0u8; COMMITMENT_LEN] {
+            return Err(EscrowError::BadAccount);
+        }
+        let side = self.ready_side(signer, now)?;
+        self.write_commitment(side, commitment);
+        self.set_sealed(side);
+        Ok(())
+    }
+
+    /// Same checks as a seal, and writes nothing. Used before the pool invoke.
     pub fn side_ready_to_seal(&mut self, signer: &[u8; 32], now: i64) -> Result<(), EscrowError> {
         let _ = self.ready_side(signer, now)?;
         Ok(())
     }
 
+    /// Both approvals, this party, still inside the window, and not yet sealed.
     fn ready_side(&mut self, signer: &[u8; 32], now: i64) -> Result<Side, EscrowError> {
         self.require_proposed(now)?;
         if !self.both_approved() {
@@ -140,17 +191,39 @@ impl<'a> Escrow<'a> {
         Ok(side)
     }
 
-    /// Both locks are enough. The deadline does not hold a completed swap.
+    /// Marks `Exchanged`. The clock is not checked. Call only after the invoke.
     pub fn release(&mut self, _now: i64) -> Result<(), EscrowError> {
-        self.require_open()?;
-        if !(self.a_sealed() && self.b_sealed()) {
-            return Err(EscrowError::OtherSideMissing);
-        }
+        self.release_ready()?;
         self.data[OFF_STATUS] = Status::Exchanged as u8;
         Ok(())
     }
 
+    /// Proposed, and both seals set. Does not look at the clock or commitments.
+    pub fn release_ready(&self) -> Result<(), EscrowError> {
+        self.require_open()?;
+        if !(self.a_sealed() && self.b_sealed()) {
+            return Err(EscrowError::OtherSideMissing);
+        }
+        Ok(())
+    }
+
+    /// Clears this side's seal and commitment, then marks `Reclaimed`.
     pub fn reclaim(&mut self, signer: &[u8; 32], now: i64) -> Result<(), EscrowError> {
+        let side = self.reclaim_side(signer, now)?;
+        self.set_sealed_flag(side, false);
+        self.write_commitment(side, &[0u8; COMMITMENT_LEN]);
+        self.data[OFF_STATUS] = Status::Reclaimed as u8;
+        Ok(())
+    }
+
+    /// Same checks as `reclaim`, and writes nothing.
+    pub fn reclaim_ready(&self, signer: &[u8; 32], now: i64) -> Result<(), EscrowError> {
+        let _ = self.reclaim_side(signer, now)?;
+        Ok(())
+    }
+
+    /// After `start_at`, this side sealed, the other side still open.
+    fn reclaim_side(&self, signer: &[u8; 32], now: i64) -> Result<Side, EscrowError> {
         self.require_open()?;
         if now < self.start_at() {
             return Err(EscrowError::TooEarly);
@@ -162,27 +235,60 @@ impl<'a> Escrow<'a> {
         if self.sealed(side.other()) {
             return Err(EscrowError::OtherSideSealed);
         }
-        self.set_sealed_flag(side, false);
-        self.data[OFF_STATUS] = Status::Reclaimed as u8;
-        Ok(())
+        Ok(side)
     }
 
+    /// Wallet that created the escrow. Public on this path.
+    pub fn party_a(&self) -> &[u8; 32] {
+        self.party(OFF_PARTY_A)
+    }
+
+    /// The other wallet. Public on this path.
+    pub fn party_b(&self) -> &[u8; 32] {
+        self.party(OFF_PARTY_B)
+    }
+
+    /// `ESCROW_TAG` once `create` has written the account.
     pub fn tag(&self) -> u8 {
         self.data[OFF_TAG]
     }
 
+    /// `Proposed`, `Void`, `Exchanged`, or `Reclaimed`.
     pub fn status(&self) -> u8 {
         self.data[OFF_STATUS]
     }
 
+    /// Party A locked a note. The byte alone is not custody.
     pub fn a_sealed(&self) -> bool {
         self.data[OFF_A_SEALED] == 1
     }
 
+    /// Party B locked a note. The byte alone is not custody.
     pub fn b_sealed(&self) -> bool {
         self.data[OFF_B_SEALED] == 1
     }
 
+    /// Bump of the PDA that owns locked notes. Stored at create.
+    pub fn bump(&self) -> u8 {
+        self.data[OFF_BUMP]
+    }
+
+    /// Output note from A's lock. Zero until that invoke succeeds.
+    pub fn commitment_a(&self) -> [u8; COMMITMENT_LEN] {
+        self.commitment_at(OFF_COMMIT_A)
+    }
+
+    /// Output note from B's lock. Zero until that invoke succeeds.
+    pub fn commitment_b(&self) -> [u8; COMMITMENT_LEN] {
+        self.commitment_at(OFF_COMMIT_B)
+    }
+
+    /// Both locks stored a non-zero output. Required before a swap.
+    pub fn has_both_commitments(&self) -> bool {
+        self.commitment_a() != [0u8; COMMITMENT_LEN] && self.commitment_b() != [0u8; COMMITMENT_LEN]
+    }
+
+    /// Tag is set and status is still `Proposed`.
     fn require_open(&self) -> Result<(), EscrowError> {
         if self.data[OFF_TAG] != ESCROW_TAG {
             return Err(EscrowError::NotInitialized);
@@ -193,6 +299,7 @@ impl<'a> Escrow<'a> {
         Ok(())
     }
 
+    /// Open, and `now` is strictly before both the deadline and `start_at`.
     fn require_proposed(&mut self, now: i64) -> Result<(), EscrowError> {
         self.require_open()?;
         if now >= self.approval_deadline() || now >= self.start_at() {
@@ -201,10 +308,12 @@ impl<'a> Escrow<'a> {
         Ok(())
     }
 
+    /// Both approval bytes are 1.
     fn both_approved(&self) -> bool {
         self.data[OFF_A_APPROVED] == 1 && self.data[OFF_B_APPROVED] == 1
     }
 
+    /// `A` or `B`. Any other signer is `NotAParty`.
     fn side(&self, signer: &[u8; 32]) -> Result<Side, EscrowError> {
         if signer == self.party(OFF_PARTY_A) {
             Ok(Side::A)
@@ -215,12 +324,14 @@ impl<'a> Escrow<'a> {
         }
     }
 
+    /// 32-byte wallet at a fixed offset. The layout makes a short read impossible.
     fn party(&self, offset: usize) -> &[u8; 32] {
         self.data[offset..offset + 32]
             .try_into()
             .expect("party field is 32 bytes")
     }
 
+    /// That side's seal byte is 1.
     fn sealed(&self, side: Side) -> bool {
         match side {
             Side::A => self.a_sealed(),
@@ -228,10 +339,28 @@ impl<'a> Escrow<'a> {
         }
     }
 
+    /// Sets that side's seal byte. Does not touch the commitment.
     fn set_sealed(&mut self, side: Side) {
         self.set_sealed_flag(side, true);
     }
 
+    /// Stores the 32-byte note commitment for that side.
+    fn write_commitment(&mut self, side: Side, commitment: &[u8; COMMITMENT_LEN]) {
+        let offset = match side {
+            Side::A => OFF_COMMIT_A,
+            Side::B => OFF_COMMIT_B,
+        };
+        self.data[offset..offset + COMMITMENT_LEN].copy_from_slice(commitment);
+    }
+
+    /// Copies one commitment field out of the account.
+    fn commitment_at(&self, offset: usize) -> [u8; COMMITMENT_LEN] {
+        let mut commitment = [0u8; COMMITMENT_LEN];
+        commitment.copy_from_slice(&self.data[offset..offset + COMMITMENT_LEN]);
+        commitment
+    }
+
+    /// Writes 1 or 0 into that side's seal byte.
     fn set_sealed_flag(&mut self, side: Side, value: bool) {
         let byte = u8::from(value);
         match side {
@@ -240,10 +369,12 @@ impl<'a> Escrow<'a> {
         }
     }
 
+    /// Unix time after which a lone lock can be reclaimed.
     fn start_at(&self) -> i64 {
         i64_at(self.data, OFF_START)
     }
 
+    /// Last time a party may approve. Must be at or before `start_at`.
     fn approval_deadline(&self) -> i64 {
         i64_at(self.data, OFF_DEADLINE)
     }
@@ -256,6 +387,7 @@ enum Side {
 }
 
 impl Side {
+    /// The party that is not `self`.
     fn other(self) -> Self {
         match self {
             Side::A => Side::B,
@@ -264,6 +396,7 @@ impl Side {
     }
 }
 
+/// Little-endian i64 at a fixed offset. The account length makes this in range.
 fn i64_at(data: &[u8], offset: usize) -> i64 {
     let bytes: [u8; 8] = data[offset..offset + 8]
         .try_into()

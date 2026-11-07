@@ -2,7 +2,7 @@
 
 The first tool is escrow, and it is the weekend demo on devnet for 6–8 November 2026. Two people exchange assets. Each side locks what they are giving: a token, or an NFT as a Token-2022 or SPL amount of 1. Both approve before the start. As soon as both locks are sealed, either side can release and take the other side's asset. If the other side never locks, the first side reclaims after the deadline. A sealed side has no cancel. Sunday shows that path: Confidential on the permissionless Default ring, in Pinocchio.
 
-The sequence after escrow is payroll, then vesting, then subscription, in the same program. Payroll is one salary stream: the payer funds their own shielded account and the payee claims. Vesting is the partial claim after payroll: weekly notes, claim one elapsed bump, and the locked remainder stays sealed. A bonus can sit there as a second vested stream, not as its own launch. Subscription is last: a next-period approval window, pay at start or pay at end, and a recurring roll. It is supported and it is not the demo. Fee redistribution stays in the backlog. It uses the same partial-claim shape as vesting and is not a weekend blocker.
+The sequence after escrow is payroll, then vesting, then subscription. Escrow stays `pescrow`. Payroll is `pproll`, a separate program: one salary stream, the employer funds a shielded note, and the employee claims it. Vesting is the partial claim after payroll, on `pproll`, not a third program. A bonus can sit there as a second vested stream, not as its own launch. Subscription is last: a next-period approval window, pay at start or pay at end, and a recurring roll. It is supported and it is not the demo. Fee redistribution stays in the backlog. It uses the same partial-claim shape as vesting and is not a weekend blocker.
 
 Ring and wallet visibility are separate choices, frozen at create. The permissionless ring or a custom ring can be paired with public wallets or private wallets. The permissionless ring prints both wallets, so the private choice on that ring is rejected until a transfer there can omit the owner. A custom ring can be opened either way, and both wait on the ring program id from Helius. Friday through Sunday do not wait on that reply. The path that ships is the permissionless ring with public wallets. Company tooling comes later: a fuller dashboard, an API, an MCP server, and CPI from other programs. This weekend the target is the on-chain program and a thin devnet dashboard.
 
@@ -14,13 +14,13 @@ The order is escrow, then payroll, then vesting, then subscription.
 
 Escrow is the first tool and the Sunday demo. Two parties exchange assets. Each locks a note: fungible tokens, or an NFT as a supply-1 token. Once both notes are locked, either side can release and take the other side's asset. A side that locked can reclaim after the deadline if the other side never locks. There is no cancel once that side is sealed. The path is Confidential on the Default ring, in Pinocchio.
 
-Payroll is next, in the same program. One salary stream. The payer funds their own shielded account. The payee claims. On a payroll stream the employer is the subscriber and signs `fund_current`. The employee is the issuer and claims. That mapping is the payroll step. It is not the first escrow demo.
+Payroll is next, in `pproll`, not in the escrow program. One employer and one employee. Both approve. The employer funds each period from their own shielded balance. The employee claims that note when the period ends. The amount stays in the note. A funded period has no cancel. `stop` only blocks a later fund. The account layout is in `pproll/README.md`. It is not the first escrow demo.
 
-Vesting follows payroll. `claim_vested` releases one elapsed weekly note. The locked remainder stays sealed. A cliff is optional. With no cliff, notes unlock on their week. With a cliff, nothing is claimable before `cliff_end`. At the cliff, every note whose week has already elapsed becomes claimable, and later weeks still wait. A bonus can sit on the same payer as a second vested stream. It is not a separate product launch.
+Vesting follows payroll, on `pproll`. `claim_vested` releases one elapsed weekly note. The locked remainder stays sealed. A cliff is optional. With no cliff, notes unlock on their week. With a cliff, nothing is claimable before `cliff_end`. At the cliff, every note whose week has already elapsed becomes claimable, and later weeks still wait. A bonus can sit on the same payer as a second vested stream. It is not a separate product launch.
 
 Subscription is last. The next period has its own approval window. Pay at start and pay at end are both supported, and `roll` can recur. Subscription is not the weekend demo.
 
-Fee redistribution is the same partial-claim shape as vesting, funded by the fee payer. Fees land in the payer's funded position. Entitlements unlock over time or in bumps. Recipients partial-claim the unlocked share only. It is backlog, not a second program, and not a weekend blocker.
+Fee redistribution is the same partial-claim shape as vesting, funded by the fee payer. Fees land in the payer's funded position. Entitlements unlock over time or in bumps. Recipients partial-claim the unlocked share only. It is backlog, not a separate program, and not a weekend blocker.
 
 ## Modes
 
@@ -80,7 +80,7 @@ The request is already with Helius: a devnet custom ring for testing, with a pub
 | User registry | `regyS5rkAcw2YzDJCmTwCTHs2s246FXxbmuRZ42u2PD` |
 | State Merkle tree, devnet | `33KVhbT4QtdQDrrrGwwThqD47Dh4Q6tA443t9jMNcWFN` |
 
-These addresses come from Helius. This document does not invent Privacy Program instruction layouts. Copy the timelock example for the CPI shape, then keep our handlers in Pinocchio. The Anonymous ring program id is unset until Helius opens the test ring. Do not invent one.
+These addresses come from Helius. This document does not invent Privacy Program instruction layouts. A lock, a swap, and a return each verify a circuit whose public inputs are read from the escrow account, then `SppTransactAccounts::invoke` moves the note. The locked note is owned by this program's PDA (`escrow-lock` plus the escrow address). The program signs that PDA on the swap and the return. The seal is written only after the invoke succeeds. Handlers stay Pinocchio. The Anonymous ring program id is unset until Helius opens the test ring. Do not invent one.
 
 ## Default ring
 
@@ -114,7 +114,7 @@ Hiding the schedule would mean committing the deadline inside the note and provi
 
 ## Shape
 
-One Pinocchio program. One stream account per funded position: an escrow lock, a payroll stream, a vested stream, a fee share, or a subscription. In Confidential and Anonymous, notes live in the privacy pool, and after funding the program owns the notes. The price never lands in plaintext on the stream in those two modes. Public stores mint and amount on the stream account and does not use a ring.
+Escrow is one Pinocchio program, `pescrow`. Payroll is a second program, `pproll`. The layout below was an earlier combined stream. It is not the payroll account. Payroll's stream and period accounts are in `pproll/README.md`. Vesting later uses `pproll`. In Confidential and Anonymous, notes live in the privacy pool, and after funding the program owns the notes. The price never lands in plaintext on the stream in those two modes. Public stores mint and amount on the stream account and does not use a ring.
 
 The subscriber signs `fund_current` and each open that moves value under the frozen terms. After that, `roll` is permissionless: the frozen terms and the earlier signature are the authorization. `roll` pays or seals under the clock. It does not ask for a new price.
 
@@ -323,7 +323,7 @@ The Sunday demo is a sealed Confidential escrow: both parties approve, the payer
 
 ## Why this shape
 
-Users on the Default ring share one permissionless pool, so one user cannot read another's notes. Escrow is the first stream. Payroll, vesting, and subscription use the same account after that, so the terms and the release rules are enforceable on Solana. A fee position uses the vesting partial claim and stays backlog.
+Users on the Default ring share one permissionless pool, so one user cannot read another's notes. Escrow is the swap program. Payroll is its own program, so a salary claim cannot be read as one side of a swap. Vesting later is a partial claim on `pproll`. A fee position uses that partial claim and stays backlog.
 
 Confidential publishes the parties on the stream account and keeps the price in the note. Anonymous hides the relationship only when that account stores commitments and the custom ring is the one Helius opened. Public keeps mint, amount, parties, and schedule on the account. `roll` enforces the frozen contract with `Clock`, the status, and, in the ring modes, the note release times.
 
@@ -372,4 +372,4 @@ The demo is a sealed Confidential escrow on the Default ring. Both parties appro
 
 Sunday is done when that escrow can be funded from the payer's shielded balance and released as soon as both sides are locked on the page, with the Pinocchio tests still covering every check in this document. Payroll, vesting, and subscription are not required for Sunday to be done. Anonymous is enabled in the same program when the test ring program id is configured, and is not required for Sunday to be done.
 
-After that release path works, the order is payroll, then vesting, then subscription. Vesting adds `week_count` equal notes, note `k` releasable at `start_at + k` weeks, and `claim_vested`. Count 1 releases only the oldest elapsed note. A larger count releases every elapsed unclaimed note and stops before a future week. Claiming week 1 leaves week 2 locked. If the proofs do not fit in one transaction, split the open into a short sequence the subscriber signs. Those checks stay in this document. They do not gate the escrow demo. On a payroll stream the employer is the subscriber and signs `fund_current`. The employee is the issuer and claims.
+After that release path works, the order is payroll, then vesting, then subscription. Payroll is `pproll`: the employer funds a period note, and the employee claims it after the period ends. Vesting is a later partial claim on that same program. Those checks do not gate the escrow demo.
