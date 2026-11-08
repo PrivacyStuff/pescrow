@@ -19,21 +19,30 @@ export default function ToolsPage(props: PageProps<"/app">) {
         Pick the one you want to test.
       </h1>
       <p className="mt-8 max-w-xl text-lg leading-8 text-muted">
-        Each card opens that product. Subscription and vesting say they are not ready.
+        Escrow and payroll open. Subscription and vesting are not ready yet.
       </p>
       <ul className="mt-16 grid gap-4 sm:grid-cols-2">
         {PRODUCTS.map((item) => (
           <li key={item.id} className="min-h-56">
-            <Link
-              href={item.href}
-              className="flex h-full flex-col border border-line p-6 transition-colors hover:border-foreground"
-            >
-              <p className={`text-sm tracking-[0.18em] uppercase ${item.ready ? "text-muted" : "text-stamp"}`}>
-                {item.ready ? "Open" : "To come"}
-              </p>
-              <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em]">{item.id}</h2>
-              <p className="mt-4 max-w-md leading-7 text-muted">{item.summary}</p>
-            </Link>
+            {item.ready ? (
+              <Link
+                href={item.href}
+                className="flex h-full flex-col border border-line p-6 transition-colors hover:border-foreground"
+              >
+                <p className="text-sm tracking-[0.18em] text-muted uppercase">Open</p>
+                <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em]">{item.id}</h2>
+                <p className="mt-4 max-w-md leading-7 text-muted">{item.summary}</p>
+              </Link>
+            ) : (
+              <div
+                aria-disabled="true"
+                className="flex h-full cursor-not-allowed flex-col border border-line p-6 opacity-60 select-none"
+              >
+                <p className="text-sm tracking-[0.18em] text-stamp uppercase">Coming soon</p>
+                <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em] text-muted">{item.id}</h2>
+                <p className="mt-4 max-w-md leading-7 text-muted">{item.summary}</p>
+              </div>
+            )}
           </li>
         ))}
         <li className="sm:col-span-2">

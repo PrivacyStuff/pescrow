@@ -22,7 +22,6 @@ export function RedeemDialog({
   const nft = info?.kind === "nft";
   const decimals = note === null ? 0 : note.mint === SOL_MINT ? SOL_DECIMALS : (info?.decimals ?? 0);
   const [amount, setAmount] = useState(note === null || nft ? "1" : formatBase(note.amount, decimals));
-
   useEffect(() => {
     if (note === null) return;
     function onKey(event: KeyboardEvent): void {

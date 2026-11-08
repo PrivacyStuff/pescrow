@@ -1,4 +1,17 @@
 import { splitChainText } from "./explorer-link.ts";
+import { stripProverStderr } from "./prover-stderr.ts";
+
+const TX_LOGGED = Symbol.for("privacy.txLogged");
+
+export function markTxLogged(error: unknown): void {
+  if (typeof error === "object" && error !== null) {
+    Object.defineProperty(error, TX_LOGGED, { value: true, enumerable: false });
+  }
+}
+
+export function wasTxLogged(error: unknown): boolean {
+  return typeof error === "object" && error !== null && TX_LOGGED in error;
+}
 
 export const TX_LOG_LIMIT = 50;
 export const TOAST_LINGER_MS = 6000;
@@ -84,7 +97,9 @@ export function withoutSignatures(text: string): string {
 }
 
 export function errorText(error: unknown, fallback: string): string {
-  const message = error instanceof Error && error.message.length > 0 ? error.message : fallback;
+  const raw = error instanceof Error && error.message.length > 0 ? error.message : fallback;
+  const stripped = stripProverStderr(raw).trim();
+  const message = stripped.length > 0 ? stripped : fallback;
   return message.length > ERROR_TEXT_MAX ? `${message.slice(0, ERROR_TEXT_MAX)}…` : message;
 }
 

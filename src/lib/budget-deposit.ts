@@ -13,6 +13,7 @@ import {
 import { chooseLookupSlot, recentSlotFromCreateInstruction } from "../../pescrow/sdk/src/lookup-slot.ts";
 import { formatAsset, short } from "../components/dashboard/format.ts";
 import { encodeBase58 } from "./escrow-account.ts";
+import { stripProverStderr } from "./prover-stderr.ts";
 import { type TokenMetadata } from "./token-metadata.ts";
 import { PPROLL_PROGRAM_ID } from "./payroll-account.ts";
 
@@ -103,7 +104,7 @@ export type LookupPlan = {
 };
 
 export function scrubPayrollError(text: string): string {
-  return text.replace(/api-key=[^&\s"]+/g, "api-key=REDACTED").replace(/[0-9a-fA-F]{64,}/g, "[redacted]");
+  return stripProverStderr(text).replace(/api-key=[^&\s"]+/g, "api-key=REDACTED").replace(/[0-9a-fA-F]{64,}/g, "[redacted]");
 }
 
 export function viewingKeyBelongsTo(vault: string): string {

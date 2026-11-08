@@ -7,7 +7,6 @@ import { type TokenMetadata } from "@/lib/token-metadata";
 import type { HeldAsset } from "@/lib/wallet-holdings";
 import { AddressLink } from "./chain-link";
 import { AssetFields } from "./asset-fields";
-import { Fold } from "./fold";
 import { formatAsset, short } from "./format";
 import type { AssetDraft, Note } from "./types";
 
@@ -83,12 +82,9 @@ export function EscrowCard({
 
   return (
     <li className="text-sm leading-7">
-      <Fold
-        title={<AddressLink address={row.address} className="break-all" />}
-        titleInteractive
-        level="p"
-        titleClassName="min-w-0 break-all"
-      >
+      <p className="min-w-0 break-all">
+        <AddressLink address={row.address} className="break-all" />
+      </p>
       <p className="text-muted">
         {row.role === "a" ? "Issued" : "Received"} · counterparty {short(counterparty)} · {row.status}
       </p>
@@ -153,7 +149,6 @@ export function EscrowCard({
         ) : null}
       </div>
       {blocker !== null ? <p className="mt-2 max-w-xl leading-6 text-muted">{blocker}</p> : null}
-      </Fold>
     </li>
   );
 }

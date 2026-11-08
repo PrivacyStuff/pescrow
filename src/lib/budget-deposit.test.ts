@@ -615,4 +615,16 @@ describe("scrubPayrollError", () => {
     assert.match(text, /REDACTED/);
     assert.match(text, /\[redacted\]/);
   });
+
+  it("drops prover stderr noise and keeps a program error", () => {
+    const text = scrubPayrollError(
+      [
+        "(node:1) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///budget-deposit.ts is not specified and it doesn't parse as CommonJS.",
+        "using deprecated parameters for the initialization function; pass a single object instead",
+        "TRANSACTION_PROGRAM_BUILD",
+        "custom program error: 0x1b60",
+      ].join("\n"),
+    );
+    assert.equal(text, "custom program error: 0x1b60");
+  });
 });

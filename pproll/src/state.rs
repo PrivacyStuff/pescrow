@@ -687,7 +687,6 @@ impl<'a> PayrollAccount<'a> {
         }
         if args.installment == [0u8; COMMITMENT_LEN]
             || args.budget == [0u8; COMMITMENT_LEN]
-            || args.payee_hash == [0u8; OWNER_HASH_LEN]
             || args.note_hash == [0u8; OWNER_HASH_LEN]
             || args.viewing[0] != 4
         {
@@ -719,7 +718,15 @@ impl<'a> PayrollAccount<'a> {
     }
 
     /// One party, once, strictly before the deadline and `start_at`.
-    pub fn approve(&mut self, signer: &[u8; 32], now: i64) -> Result<(), PayrollError> {
+    ///
+    /// The payee writes `payee_hash` here. Open leaves it empty. The employer
+    /// cannot choose the recipient. A hash already stored cannot be replaced.
+    pub fn approve(
+        &mut self,
+        signer: &[u8; 32],
+        now: i64,
+        payee_hash: &[u8; 32],
+    ) -> Result<(), PayrollError> {
         self.require_tag()?;
         if self.data[PAY_OFF_STATUS] != Status::Proposed as u8 {
             return Err(PayrollError::AlreadyFinished);
@@ -729,10 +736,34 @@ impl<'a> PayrollAccount<'a> {
         }
         match self.side(signer)? {
             Side::Employer => self.data[PAY_OFF_EMPLOYER_APPROVED] = 1,
-            Side::Employee => self.data[PAY_OFF_PAYEE_APPROVED] = 1,
+            Side::Employee => {
+                self.bind_payee_hash(payee_hash)?;
+                self.data[PAY_OFF_PAYEE_APPROVED] = 1;
+            }
         }
-        if self.data[PAY_OFF_EMPLOYER_APPROVED] == 1 && self.data[PAY_OFF_PAYEE_APPROVED] == 1 {
+        if self.data[PAY_OFF_EMPLOYER_APPROVED] == 1
+            && self.data[PAY_OFF_PAYEE_APPROVED] == 1
+            && self.payee_hash() != [0u8; OWNER_HASH_LEN]
+        {
             self.data[PAY_OFF_FROZEN] = 1;
+        }
+        Ok(())
+    }
+
+    /// The payee binds the shielded owner once. An empty offer is accepted only
+    /// when a hash was already stored at open.
+    fn bind_payee_hash(&mut self, offered: &[u8; 32]) -> Result<(), PayrollError> {
+        let current = self.payee_hash();
+        if current == [0u8; OWNER_HASH_LEN] {
+            if offered == &[0u8; OWNER_HASH_LEN] {
+                return Err(PayrollError::BadAccount);
+            }
+            self.data[PAY_OFF_PAYEE_HASH..PAY_OFF_PAYEE_HASH + OWNER_HASH_LEN]
+                .copy_from_slice(offered);
+            return Ok(());
+        }
+        if offered != &[0u8; OWNER_HASH_LEN] && offered != &current {
+            return Err(PayrollError::BadAccount);
         }
         Ok(())
     }
@@ -745,6 +776,9 @@ impl<'a> PayrollAccount<'a> {
         }
         if self.data[PAY_OFF_FROZEN] != 1 {
             return Err(PayrollError::NotBothApproved);
+        }
+        if self.payee_hash() == [0u8; OWNER_HASH_LEN] {
+            return Err(PayrollError::BadAccount);
         }
         if self.data[PAY_OFF_STATUS] != Status::Proposed as u8 {
             return Err(PayrollError::AlreadyInitialized);
@@ -771,6 +805,9 @@ impl<'a> PayrollAccount<'a> {
         }
         if self.data[PAY_OFF_STATUS] != Status::Active as u8 {
             return Err(PayrollError::NotFunded);
+        }
+        if self.payee_hash() == [0u8; OWNER_HASH_LEN] {
+            return Err(PayrollError::BadAccount);
         }
         let due = claim_at(self.start_at(), self.period_secs(), self.next_redeem())?;
         if now < due {

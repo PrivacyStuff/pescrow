@@ -14,6 +14,16 @@ export const NOT_READY_TO_FUND = "The payroll is not ready to fund.";
 export const NOT_READY_TO_CRANK = "The payroll is not ready to crank.";
 export const PAYROLL_NOT_FUNDED = "Fund the payroll before cranking it.";
 export const PAYROLL_SIMULATION_FAILED = "The payroll transaction did not simulate.";
+export const PAYROLL_NOTE_SHORT = "The payroll note holds less than one roll.";
+export const PAY_PROOF_NOT_BUILT = "The pay proof could not be built.";
+
+/** Assertion labels from the pproll `Pay` circuit, which the SDK reports only as TRANSACTION_PROGRAM_BUILD. */
+const PAY_CIRCUIT_FAILURES: Readonly<Record<string, string>> = {
+  "the transfer exceeds the balance": PAYROLL_NOTE_SHORT,
+  "the note owner": WRONG_SHIELDED_OWNER,
+  "the amount commitment": MISSING_PAYROLL_KEY,
+  "the payroll keeps its change": MISSING_PAYROLL_KEY,
+};
 
 const HEX_32 = /^[0-9a-f]{64}$/i;
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -21,10 +31,15 @@ const DATA_HEX = /^[0-9a-f]+$/i;
 const ROLL_DATA_HEX_MAX = 200_000;
 const KEY_MIN = 3;
 const KEY_MAX = 64;
+const DIGITS = /^\d{1,20}$/;
+const U64_MAX = (BigInt(1) << BigInt(64)) - BigInt(1);
+/** A weekly payroll for ten years. Keeps the form from asking for an absurd budget. */
+export const MAX_ROLLS = 520;
 
 export type PayrollStep =
   | { readonly action: "fund" }
   | { readonly action: "crank" }
+  | { readonly action: "finished"; readonly rolls: number }
   | { readonly action: "due"; readonly dueAt: number }
   | { readonly action: "missing-payroll-key" }
   | { readonly action: "missing-budget-key" }
@@ -45,9 +60,34 @@ export type PayrollStepInput = {
   readonly budgetFunded: boolean;
   readonly hasPayrollKey: boolean;
   readonly hasBudgetKey: boolean;
+  /** Rolls the budget covers, from the browser terms. The chain only holds commitments. `null` when unknown. */
+  readonly rollsTotal: number | null;
   /** Chain or browser unix seconds. `null` until the page has a clock, so Crank stays hidden. */
   readonly now: number | null;
 };
+
+/**
+ * Budget for `rolls` installments. Fund later needs a budget note strictly larger than this,
+ * because the pool keeps change.
+ */
+export function budgetForRolls(installment: bigint, rollsText: string): bigint | null {
+  if (installment <= BigInt(0) || !/^\d{1,4}$/.test(rollsText)) return null;
+  const rolls = Number(rollsText);
+  if (rolls < 1 || rolls > MAX_ROLLS) return null;
+  const budget = installment * BigInt(rolls);
+  return budget > U64_MAX ? null : budget;
+}
+
+/** Whole installments in the budget. Terms saved before `budget` was stored had budget equal to the installment. */
+export function rollsInBudget(installment: string, budget: string | undefined): number | null {
+  if (!DIGITS.test(installment)) return null;
+  const each = BigInt(installment);
+  if (each === BigInt(0)) return null;
+  if (budget === undefined) return 1;
+  if (!DIGITS.test(budget)) return null;
+  const rolls = BigInt(budget) / each;
+  return rolls === BigInt(0) || rolls > BigInt(MAX_ROLLS) ? null : Number(rolls);
+}
 
 /**
  * Period `index` is claimable at `start + (index + 1) * period`.
@@ -96,12 +136,21 @@ export function payrollStep(input: PayrollStepInput): PayrollStep {
   }
   if (canCrank(input)) {
     if (!input.hasPayrollKey) return { action: "missing-payroll-key" };
+    if (input.rollsTotal !== null && input.nextRedeem >= input.rollsTotal) return { action: "finished", rolls: input.rollsTotal };
     const dueAt = claimAt(input.startAt, input.periodSecs, input.nextRedeem);
     if (dueAt === null) return { action: "none" };
     if (input.now === null || input.now < dueAt) return { action: "due", dueAt };
     return { action: "crank" };
   }
+  if (input.kind === "budget" && input.status === "Active" && input.rollsTotal !== null && input.nextRedeem >= input.rollsTotal) {
+    return { action: "finished", rolls: input.rollsTotal };
+  }
   return { action: "none" };
+}
+
+export function payBuildFailure(circuitLabel: string | null): string {
+  if (circuitLabel === null || !Object.hasOwn(PAY_CIRCUIT_FAILURES, circuitLabel)) return PAY_PROOF_NOT_BUILT;
+  return PAY_CIRCUIT_FAILURES[circuitLabel] ?? PAY_PROOF_NOT_BUILT;
 }
 
 export function parsePreparedRoll(value: unknown): PreparedDeposit | null {
