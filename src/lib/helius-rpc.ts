@@ -44,9 +44,10 @@ function httpsRpcUrl(value: string | undefined): string | null {
 }
 
 export async function helius<T>(method: string, params: unknown[] | Record<string, unknown>): Promise<T> {
+  const url = heliusRpcUrl();
   let response: Response;
   try {
-    response = await fetch(heliusRpcUrl(), {
+    response = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
