@@ -55,7 +55,16 @@ function DemoCard({ videoId }: { videoId: string | null }) {
   return (
     <article className="border border-line p-6">
       <p className="text-sm tracking-[0.18em] text-stamp uppercase">Demo</p>
-      <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em]">Watch the walkthrough</h2>
+      <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em]">
+        <Link href="/video" className="hover:underline">
+          Watch the walkthrough
+        </Link>
+      </h2>
+      <p className="mt-4">
+        <Link href="/video" className="text-sm tracking-[0.18em] text-stamp uppercase hover:underline">
+          Play on /video
+        </Link>
+      </p>
       <div className="mt-6 aspect-video border border-line bg-background">
         {videoId === null ? (
           <p className="flex h-full items-center px-6 text-muted">The walkthrough will play in this frame.</p>
