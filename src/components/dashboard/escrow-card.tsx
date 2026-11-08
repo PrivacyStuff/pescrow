@@ -5,6 +5,7 @@ import { sideView, type SwapTerms } from "@/lib/chunk-plan";
 import { openerCanLock, type EscrowView } from "@/lib/escrow-account";
 import { type TokenMetadata } from "@/lib/token-metadata";
 import type { HeldAsset } from "@/lib/wallet-holdings";
+import { AddressLink } from "./chain-link";
 import { AssetFields } from "./asset-fields";
 import { Fold } from "./fold";
 import { formatAsset, short } from "./format";
@@ -15,7 +16,7 @@ export function EscrowCard({
   terms,
   assets,
   metadata,
-  selected,
+  selectedNotes,
   notes,
   holdings,
   seedReady,
@@ -29,7 +30,7 @@ export function EscrowCard({
   terms: SwapTerms | undefined;
   assets: Readonly<Record<string, AssetInfo>>;
   metadata: Readonly<Record<string, TokenMetadata>>;
-  selected: Note | undefined;
+  selectedNotes: readonly Note[];
   notes: readonly Note[];
   holdings: readonly HeldAsset[] | null;
   seedReady: boolean;
@@ -72,9 +73,22 @@ export function EscrowCard({
   const acceptMessage = acceptReason({ gate, aSealed: row.aSealed, lockLabel, receiveLabel, coverLabel });
   const acceptDisabled = busy || !gate.enabled || (gate.canLock && !gate.canApprove && !seedReady);
 
+  const blocker = escrowBlocker({
+    waiting: open && issued && row.aSealed,
+    needUnlock: canLock && !seedReady,
+    needShield: canLock && seedReady && view !== null && !selectedNotes.some((item) => item.mint === view.lock.mint),
+    acceptMessage: open && !issued ? acceptMessage : null,
+    needUnlockBeforeLock: open && !issued && row.aSealed && !seedReady && (gate.canLock || gate.canApprove),
+  });
+
   return (
     <li className="text-sm leading-7">
-      <Fold title={row.address} level="p" titleClassName="min-w-0 break-all">
+      <Fold
+        title={<AddressLink address={row.address} className="break-all" />}
+        titleInteractive
+        level="p"
+        titleClassName="min-w-0 break-all"
+      >
       <p className="text-muted">
         {row.role === "a" ? "Issued" : "Received"} · counterparty {short(counterparty)} · {row.status}
       </p>
@@ -84,7 +98,6 @@ export function EscrowCard({
       <p className="text-muted">Approve by {stamp(row.approvalDeadline)} · reclaim after {stamp(row.startAt)}</p>
       {view === null ? (
         <div className="mt-3">
-          <p className="text-muted">No swap terms on this machine yet. The program does not store them.</p>
           <AssetFields legend="What you lock" value={mine} disabled={busy} onChange={setMine} />
           <AssetFields legend="What you expect back" value={theirs} disabled={busy} onChange={setTheirs} />
           <button
@@ -99,11 +112,10 @@ export function EscrowCard({
       ) : (
         <p>
           You lock {formatAsset(view.lock.amount, view.lock.mint, assets[view.lock.mint]?.decimals, metadata[view.lock.mint])}. You receive{" "}
-          {formatAsset(view.receive.amount, view.receive.mint, assets[view.receive.mint]?.decimals, metadata[view.receive.mint])}. The program does not enforce these amounts.
+          {formatAsset(view.receive.amount, view.receive.mint, assets[view.receive.mint]?.decimals, metadata[view.receive.mint])}.
         </p>
       )}
       <div className="mt-3 flex flex-wrap items-end gap-3">
-        {open && issued && row.aSealed ? <p className="text-muted">Funds are escrowed. Waiting for the recipient to accept or reject.</p> : null}
         {canLock ? (
           <label>
             Amount
@@ -124,10 +136,6 @@ export function EscrowCard({
             Lock into escrow
           </button>
         ) : null}
-        {canLock && !seedReady ? <p className="text-muted">Unlock private balance before this lock.</p> : null}
-        {canLock && seedReady && view !== null && (selected === undefined || selected.mint !== view.lock.mint) ? (
-          <p className="text-muted">Shield the asset you are locking, then select that note.</p>
-        ) : null}
         {open && !issued ? (
           <button
             type="button"
@@ -138,19 +146,32 @@ export function EscrowCard({
             Accept
           </button>
         ) : null}
-        {open && !issued && acceptMessage !== null ? <p className="max-w-xl text-muted">{acceptMessage}</p> : null}
-        {open && !issued && row.aSealed && !seedReady && (gate.canLock || gate.canApprove) ? (
-          <p className="text-muted">Unlock private balance before the lock.</p>
-        ) : null}
         {open && !issued ? (
           <button type="button" className="border border-foreground px-4 py-2 disabled:opacity-40" disabled={busy} onClick={() => onReject(row)}>
             Reject
           </button>
         ) : null}
       </div>
+      {blocker !== null ? <p className="mt-2 max-w-xl leading-6 text-muted">{blocker}</p> : null}
       </Fold>
     </li>
   );
+}
+
+function escrowBlocker(input: {
+  waiting: boolean;
+  needUnlock: boolean;
+  needShield: boolean;
+  acceptMessage: string | null;
+  needUnlockBeforeLock: boolean;
+}): string | null {
+  const parts: string[] = [];
+  if (input.waiting) parts.push("Waiting for the recipient to accept or reject.");
+  if (input.needUnlock) parts.push("Unlock private balance before this lock.");
+  if (input.needShield) parts.push("Shield the asset you are locking, then select that note.");
+  if (input.acceptMessage !== null) parts.push(input.acceptMessage);
+  if (input.needUnlockBeforeLock) parts.push("Unlock private balance before the lock.");
+  return parts.length === 0 ? null : parts.join(" ");
 }
 
 function formatAssetAmount(amount: string, decimals: number): string {

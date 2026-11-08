@@ -14,7 +14,7 @@ export function EscrowList({
   terms,
   assets,
   metadata,
-  selected,
+  selectedNotes,
   notes,
   holdings,
   seedReady,
@@ -30,7 +30,7 @@ export function EscrowList({
   terms: Readonly<Record<string, SwapTerms>>;
   assets: Readonly<Record<string, AssetInfo>>;
   metadata: Readonly<Record<string, TokenMetadata>>;
-  selected: Note | undefined;
+  selectedNotes: readonly Note[];
   notes: readonly Note[];
   holdings: readonly HeldAsset[] | null;
   seedReady: boolean;
@@ -41,7 +41,7 @@ export function EscrowList({
   onSaveTerms: (address: string, role: "a" | "b", mine: AssetDraft, theirs: AssetDraft) => void;
 }) {
   return (
-    <section className="mt-12 border-t border-line pt-10">
+    <section className="mt-8 border-t border-line pt-6">
       <Fold title={title} className="font-serif text-3xl tracking-[-0.03em]">
       {rows.length === 0 ? <p className="mt-4 text-sm text-muted">{empty}</p> : null}
       <ul className="mt-6 space-y-8">
@@ -52,7 +52,7 @@ export function EscrowList({
             terms={terms[row.address]}
             assets={assets}
             metadata={metadata}
-            selected={selected}
+            selectedNotes={selectedNotes}
             notes={notes}
             holdings={holdings}
             seedReady={seedReady}

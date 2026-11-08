@@ -118,9 +118,8 @@ export function NewEscrowForm({
   const shownDecimals = decimals ?? assets[mint]?.decimals;
 
   return (
-    <section className="mt-12 border-t border-line pt-10">
+    <section className="mt-6">
       <Fold title="New escrow" className="font-serif text-3xl tracking-[-0.03em]">
-      <p className="mt-3 max-w-xl text-sm leading-6 text-muted">Ring: permissionless. Wallets: public. Those two are fixed until a custom ring exists.</p>
       <label className="mt-4 block max-w-xl text-sm">
         Counterparty wallet
         <input className={FIELD} value={counterparty} onChange={(event) => setCounterparty(event.target.value)} />
@@ -138,13 +137,6 @@ export function NewEscrowForm({
             <span>
               Shielded · {formatAsset(shielded.amount.toString(), mint, shownDecimals, metadata[mint])}
               {label !== null ? <span className="text-muted"> {label}</span> : null}
-              <span className="mt-1 block text-muted">
-                {shielded.fit === "exact"
-                  ? "This note already equals the escrow amount, so it is spent whole."
-                  : shielded.fit === "carve"
-                    ? "This note is larger. Create carves it to the escrow amount and leaves the change spendable."
-                    : "Every shielded note of this asset is smaller than the escrow amount."}
-              </span>
             </span>
           </label>
         ) : null}
@@ -153,7 +145,6 @@ export function NewEscrowForm({
             <input type="radio" name="funding-source" checked={source === "public"} onChange={() => setSource("public")} />
             <span>
               Not shielded · {formatAsset(holding.maxBase, holding.mint, holding.decimals, metadata[holding.mint])}
-              <span className="mt-1 block text-muted">Public balance. Create shields this escrow amount into the private ring, then locks that note.</span>
             </span>
           </label>
         ) : null}
@@ -167,9 +158,6 @@ export function NewEscrowForm({
         Reclaim time
         <input className={FIELD} type="datetime-local" value={times.start} onChange={(event) => setTimes((current) => ({ ...current, start: event.target.value }))} />
       </label>
-      <p className="mt-3 max-w-xl text-sm leading-6 text-muted">
-        This opens the escrow, approves you, prepares the note, and locks it. A public source is shielded for this amount. A larger shielded note is carved to this amount, and the change stays spendable. An exact note is spent as-is. The program does not store these amounts. They are saved on this machine. The recipient can accept once your asset is locked. Accept deposits their asset, swaps, and closes. Reject can void the proposal only while nothing is sealed.
-      </p>
       <button type="button" className="mt-4 border border-foreground px-4 py-2 text-sm disabled:opacity-40" disabled={busy} onClick={submit}>
         Create and escrow
       </button>

@@ -9,11 +9,12 @@ import {
 } from "@solana/spl-token";
 import { Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { Buffer } from "buffer";
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import { SOL_MINT } from "@/lib/chunk-plan";
 import { RING_MESSAGE } from "@/lib/desk-request";
 import { parseBaseAmount } from "@/lib/escrow-params";
 import { kindAgrees, solAssetInfo, type AssetInfo } from "@/lib/mint-account";
+import { notesForRedeem, redeemStopMessage } from "@/lib/note-selection";
 import { type TokenMetadata } from "@/lib/token-metadata";
 import { readHeldAssetList, shieldBaseAmount, type HeldAsset } from "@/lib/wallet-holdings";
 import {
@@ -27,9 +28,11 @@ import {
   signAndSend,
   signatureNotice,
 } from "./desk-client";
+import { LinkedText } from "./chain-link";
+import { DeskTabs, type DeskTab } from "./desk-tabs";
 import { Fold } from "./fold";
+import { formatAsset, formatBase, short } from "./format";
 import { PrivateBalance } from "./private-balance";
-import { RedeemDialog } from "./redeem-dialog";
 import { ShieldDialog } from "./shield-dialog";
 import type { Note, RingState } from "./types";
 import { WalletBar } from "./wallet-bar";
@@ -40,6 +43,7 @@ export type RingSession = {
   readonly ownerHashHex: string | null;
   readonly wallet: string | null;
   readonly selectedHash: string;
+  readonly selectedHashes: readonly string[];
   readonly busy: boolean;
   readonly assets: Readonly<Record<string, AssetInfo>>;
   readonly metadata: Readonly<Record<string, TokenMetadata>>;
@@ -57,6 +61,7 @@ export const EMPTY_RING_SESSION: RingSession = {
   ownerHashHex: null,
   wallet: null,
   selectedHash: "",
+  selectedHashes: [],
   busy: false,
   assets: { [SOL_MINT]: solAssetInfo() },
   metadata: {},
@@ -64,15 +69,25 @@ export const EMPTY_RING_SESSION: RingSession = {
 
 const METADATA_SCAN_LIMIT = 32;
 
-export function RingBalance({
-  apiRef,
-  paused,
-  onSession,
-}: {
-  apiRef?: MutableRefObject<RingApi | null>;
-  paused: boolean;
-  onSession: (session: RingSession) => void;
-}) {
+type RingBalanceShared = {
+  readonly apiRef?: MutableRefObject<RingApi | null>;
+  readonly paused: boolean;
+  readonly onSession: (session: RingSession) => void;
+};
+
+export type RingBalanceProps =
+  | (RingBalanceShared & { readonly desk: "balance" })
+  | (RingBalanceShared & {
+      readonly desk: "escrow";
+      readonly tab: DeskTab;
+      readonly onTab: (tab: DeskTab) => void;
+      readonly balance: ReactNode;
+      readonly create: ReactNode;
+    });
+
+export function RingBalance(props: RingBalanceProps) {
+  const { apiRef, paused, onSession } = props;
+  const escrow = props.desk === "escrow" ? props : null;
   const { publicKey, connected, disconnect, signMessage, signTransaction } = useWallet();
   const { setVisible } = useWalletModal();
   const seenWallet = useRef<string | null>(null);
@@ -82,17 +97,20 @@ export function RingBalance({
   const [ownerHashHex, setOwnerHashHex] = useState<string | null>(null);
   const [assets, setAssets] = useState<Record<string, AssetInfo>>({ [SOL_MINT]: solAssetInfo() });
   const [metadata, setMetadata] = useState<Record<string, TokenMetadata>>({});
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState<readonly string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [shieldOpen, setShieldOpen] = useState(false);
   const [holdings, setHoldings] = useState<readonly HeldAsset[] | null>(null);
   const [holdingsLoading, setHoldingsLoading] = useState(false);
-  const [redeemNote, setRedeemNote] = useState<Note | null>(null);
-
   const wallet = publicKey?.toBase58() ?? null;
   const locked = busy !== null || paused;
+
+  function chooseTab(next: DeskTab): void {
+    if (escrow === null) return;
+    escrow.onTab(next);
+  }
 
   useEffect(() => {
     if (seenWallet.current === wallet) return;
@@ -100,7 +118,7 @@ export function RingBalance({
       setSeed(null);
       setRing(null);
       setOwnerHashHex(null);
-      setNote("");
+      setNote([]);
     }
     seenWallet.current = wallet;
   }, [wallet]);
@@ -121,7 +139,7 @@ export function RingBalance({
     setOwnerHashHex(typeof result.ownerHashHex === "string" ? result.ownerHashHex : null);
     if (wallet !== null && next.shieldedAddressHex.length > 0) rememberShielded(wallet, next.shieldedAddressHex);
     const spendable = notes.filter((item) => item.amount !== "0");
-    setNote((selectedHash) => (spendable.some((item) => item.hash === selectedHash) ? selectedHash : (spendable[0]?.hash ?? "")));
+    setNote((current) => current.filter((hash) => spendable.some((item) => item.hash === hash)));
     await rememberAssets(
       spendable.map((item) => ({ kind: item.mint === SOL_MINT ? "sol" : "token", mint: item.mint, amount: item.amount })),
       (mint, info) => setAssets((currentAssets) => ({ ...currentAssets, [mint]: info })),
@@ -166,7 +184,7 @@ export function RingBalance({
     if (apiRef === undefined) return;
     apiRef.current = {
       refreshNotes: () => refreshRef.current(),
-      selectNote: (hash) => setNote(hash),
+      selectNote: (hash) => setNote([hash]),
       shield: (asset, amountText) => shieldRef.current(asset, amountText),
     };
     return () => {
@@ -190,7 +208,8 @@ export function RingBalance({
       ring,
       ownerHashHex,
       wallet: connected ? wallet : null,
-      selectedHash: note,
+      selectedHash: note.length === 1 ? (note[0] ?? "") : "",
+      selectedHashes: note,
       busy: busy !== null,
       assets,
       metadata,
@@ -278,53 +297,78 @@ export function RingBalance({
     }
   }
 
-  async function openRedeem(row: Note): Promise<void> {
-    setFailure(null);
-    if (row.mint !== SOL_MINT && assets[row.mint] === undefined) {
-      try {
-        const info = await loadAsset({ kind: "token", mint: row.mint, amount: "1" });
-        setAssets((current) => ({ ...current, [row.mint]: info }));
-      } catch (error) {
-        setFailure(error instanceof Error ? error.message : "The mint could not be read.");
-        return;
-      }
-    }
-    setRedeemNote(row);
-  }
-
-  async function redeem(amountText: string): Promise<void> {
-    if (seed === null || publicKey === null || signTransaction === undefined || wallet === null || redeemNote === null) return;
-    const row = redeemNote;
+  async function redeemSelected(): Promise<void> {
+    if (seed === null || publicKey === null || signTransaction === undefined || wallet === null || ring === null) return;
+    const catalog = notesForRedeem(
+      ring.notes.flatMap((item) => (/^\d+$/.test(item.amount) ? [{ hash: item.hash, mint: item.mint, amount: BigInt(item.amount) }] : [])),
+      note,
+    );
+    if (catalog.length === 0) return;
+    const known = new Map<string, AssetInfo>(Object.entries(assets));
+    const sent: string[] = [];
+    let lastSignature: unknown;
     setBusy("Redeeming");
     setNotice(null);
     setFailure(null);
     try {
-      const info = row.mint === SOL_MINT ? solAssetInfo() : assets[row.mint];
-      if (info === undefined) throw new Error("The mint could not be read.");
-      if (!kindAgrees(info.kind, row.mint, info)) throw new Error("The asset kind does not match the mint.");
-      const amount = parseBaseAmount(info.kind === "nft" ? "1" : amountText, info.decimals);
-      if (amount === null || amount > BigInt(row.amount)) {
-        setFailure("Enter an amount above zero, up to this note.");
-        return;
+      for (let index = 0; index < catalog.length; index += 1) {
+        const item = catalog[index];
+        if (item === undefined) continue;
+        const row = ring.notes.find((candidate) => candidate.hash === item.hash);
+        const label = row === undefined ? short(item.hash) : formatAsset(row.amount, row.mint, known.get(row.mint)?.decimals, metadata[row.mint]);
+        if (row === undefined) {
+          setFailure(redeemStopMessage(label, sent, "That note is no longer in the private balance."));
+          return;
+        }
+        setBusy(`Redeeming ${index + 1} of ${catalog.length}`);
+        try {
+          lastSignature = await withdrawNote(row, known);
+          sent.push(label);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "The redeem failed.";
+          setFailure(redeemStopMessage(label, sent, reason));
+          return;
+        }
       }
-      if (row.mint !== SOL_MINT && info.tokenProgram === null) throw new Error("the mint has no token program");
-      await fundRingKey(publicKey, seed, signTransaction);
-      const payload = await post({
-        action: "wallet-withdraw",
-        seed: Buffer.from(seed).toString("hex"),
-        wallet,
-        mint: row.mint,
-        amount: amount.toString(),
-        ...(row.mint === SOL_MINT || info.tokenProgram === null ? {} : { tokenProgram: info.tokenProgram }),
-      });
-      setNotice(signatureNotice("Redeemed to your public balance.", payload.result?.signature));
-      setRedeemNote(null);
-      await refreshNotes();
-    } catch (error) {
-      setFailure(error instanceof Error ? error.message : "The redeem failed.");
+      const done = sent.length === 1 ? "Redeemed to your public balance." : `Redeemed ${sent.length} notes to your public balance.`;
+      setNotice(signatureNotice(done, lastSignature));
     } finally {
       setBusy(null);
+      try {
+        await refreshNotes();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "The private balance could not be read after the redeem.";
+        setFailure((current) => (current === null ? message : current));
+      }
     }
+  }
+
+  async function withdrawNote(row: Note, known: Map<string, AssetInfo>): Promise<unknown> {
+    if (seed === null || publicKey === null || signTransaction === undefined || wallet === null) {
+      throw new Error("Connect a wallet before redeeming.");
+    }
+    let info = row.mint === SOL_MINT ? solAssetInfo() : known.get(row.mint);
+    if (info === undefined) {
+      const loaded = await loadAsset({ kind: "token", mint: row.mint, amount: "1" });
+      known.set(row.mint, loaded);
+      setAssets((current) => ({ ...current, [row.mint]: loaded }));
+      info = loaded;
+    }
+    if (!kindAgrees(info.kind, row.mint, info)) throw new Error("The asset kind does not match the mint.");
+    const amountText = info.kind === "nft" ? "1" : formatBase(row.amount, info.decimals);
+    const amount = parseBaseAmount(amountText, info.decimals);
+    if (amount === null || amount > BigInt(row.amount)) throw new Error("Enter an amount above zero, up to this note.");
+    if (row.mint !== SOL_MINT && info.tokenProgram === null) throw new Error("the mint has no token program");
+    await fundRingKey(publicKey, seed, signTransaction);
+    const payload = await post({
+      action: "wallet-withdraw",
+      seed: Buffer.from(seed).toString("hex"),
+      wallet,
+      mint: row.mint,
+      amount: amount.toString(),
+      ...(row.mint === SOL_MINT || info.tokenProgram === null ? {} : { tokenProgram: info.tokenProgram }),
+    });
+    return payload.result?.signature;
   }
 
   return (
@@ -341,47 +385,68 @@ export function RingBalance({
           }
           setVisible(true);
         }}
-        onAdd={() => {
-          void openAdd();
-        }}
         onDisconnect={() => {
           void disconnect()
             .then(() => {
               setSeed(null);
               setRing(null);
               setOwnerHashHex(null);
-              setNote("");
+              setNote([]);
             })
             .catch((error: unknown) => {
               setFailure(error instanceof Error ? error.message : "The wallet did not disconnect.");
             });
         }}
       />
+      {escrow !== null ? <DeskTabs tab={escrow.tab} onTab={chooseTab} /> : null}
       {busy !== null ? <p className="mt-8 text-sm">{busy}…</p> : null}
-      {notice !== null ? <p className="mt-8 max-w-3xl break-all text-sm leading-6">{notice}</p> : null}
-      {failure !== null && !shieldOpen && redeemNote === null ? (
-        <p className="mt-8 max-w-3xl break-all text-sm leading-6 text-stamp">{failure}</p>
+      {notice !== null ? (
+        <p className="mt-8 max-w-3xl text-sm leading-6 break-all">
+          <LinkedText text={notice} />
+        </p>
       ) : null}
-      {ring === null ? (
-        <section className="mt-12 border-t border-line pt-10">
-          <Fold title="Private balance" className="font-serif text-3xl tracking-[-0.03em]">
-            <p className="mt-2 text-sm text-muted">Connect and sign the ring key to see this wallet&apos;s private balance.</p>
-          </Fold>
-        </section>
-      ) : (
-        <PrivateBalance
-          ring={ring}
-          assets={assets}
-          metadata={metadata}
-          selected={note}
-          busy={locked}
-          onSelect={setNote}
-          onAdd={() => {
-            void openAdd();
-          }}
-          onRedeem={(row) => void openRedeem(row)}
-        />
-      )}
+      {failure !== null && !shieldOpen ? (
+        <p className="mt-8 max-w-3xl text-sm leading-6 break-all text-stamp">
+          <LinkedText text={failure} />
+        </p>
+      ) : null}
+      <div
+        id={escrow !== null ? "desk-panel-balance" : undefined}
+        role={escrow !== null ? "tabpanel" : undefined}
+        aria-labelledby={escrow !== null ? "desk-tab-balance" : undefined}
+        hidden={escrow !== null && escrow.tab !== "balance"}
+      >
+        {ring === null ? (
+          <section className="mt-6">
+            <Fold title="Private balance" className="font-serif text-2xl tracking-[-0.03em]">
+              <p className="mt-2 text-sm text-muted">Connect and sign the ring key to see this wallet&apos;s private balance.</p>
+            </Fold>
+          </section>
+        ) : (
+          <PrivateBalance
+            ring={ring}
+            assets={assets}
+            metadata={metadata}
+            selected={note}
+            busy={locked}
+            onToggle={(hash) =>
+              setNote((current) => (current.includes(hash) ? current.filter((item) => item !== hash) : [...current, hash]))
+            }
+            onAdd={() => {
+              void openAdd();
+            }}
+            onRedeem={() => {
+              void redeemSelected();
+            }}
+          />
+        )}
+        {escrow?.balance}
+      </div>
+      {escrow !== null ? (
+        <div id="desk-panel-new" role="tabpanel" aria-labelledby="desk-tab-new" hidden={escrow.tab !== "new"}>
+          {escrow.create}
+        </div>
+      ) : null}
       <ShieldDialog
         open={shieldOpen}
         busy={locked}
@@ -395,15 +460,6 @@ export function RingBalance({
             // The dialog shows the failure recorded above.
           });
         }}
-      />
-      <RedeemDialog
-        key={redeemNote?.hash ?? "redeem"}
-        note={redeemNote}
-        info={redeemNote === null ? null : redeemNote.mint === SOL_MINT ? solAssetInfo() : (assets[redeemNote.mint] ?? null)}
-        busy={locked}
-        error={redeemNote === null ? null : failure}
-        onClose={() => setRedeemNote(null)}
-        onRedeem={(amount) => void redeem(amount)}
       />
     </div>
   );

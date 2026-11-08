@@ -19,15 +19,18 @@ import {
 import { parseBaseAmount, parseEscrowParams, paramRefusal, type ParsedSide } from "@/lib/escrow-params";
 import { ESCROW_ACCOUNT_SPACE, ESCROW_PROGRAM_ID, LOCK_SEED } from "@/lib/escrow-program";
 import { kindAgrees, solAssetInfo, type AssetInfo } from "@/lib/mint-account";
-import { type TokenMetadata } from "@/lib/token-metadata";
+import { notePickRefusal, pickNoteForAction, type SpendNote } from "@/lib/note-selection";
+import { metadataLabel, type TokenMetadata } from "@/lib/token-metadata";
 import { readHeldAssetList, type HeldAsset } from "@/lib/wallet-holdings";
+import { LinkedText } from "./chain-link";
 import { chainRead, fundRingKey, loadAsset, post, rememberAssets, rememberMetadata, shieldedFor, signAndSend } from "./desk-client";
+import { type DeskTab } from "./desk-tabs";
 import { EscrowList } from "./escrow-list";
 import { HistorySection } from "./history-section";
 import { NewEscrowForm, type FundingDraft, type NewEscrowDraft } from "./new-escrow-form";
 import { EMPTY_RING_SESSION, RingBalance, type RingApi, type RingSession } from "./ring-balance";
 import type { AssetDraft } from "./types";
-import { formatAsset, formatBase } from "./format";
+import { formatAsset, formatBase, short } from "./format";
 
 const PROGRAM_ID = new PublicKey(ESCROW_PROGRAM_ID);
 
@@ -40,7 +43,7 @@ export function Dashboard() {
   }, []);
   const seed = ringSession.seed;
   const ring = ringSession.ring;
-  const note = ringSession.selectedHash;
+  const selectedHashes = ringSession.selectedHashes;
   const [escrows, setEscrows] = useState<EscrowView[]>([]);
   const [terms, setTerms] = useState<Record<string, SwapTerms>>({});
   const [assets, setAssets] = useState<Record<string, AssetInfo>>({ [SOL_MINT]: solAssetInfo() });
@@ -49,11 +52,13 @@ export function Dashboard() {
   const [notice, setNotice] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [holdings, setHoldings] = useState<readonly HeldAsset[] | null>(null);
+  const [tab, setTab] = useState<DeskTab>("balance");
 
   const wallet = publicKey?.toBase58() ?? null;
   const groups = groupEscrows(escrows);
   const openNotes = (ring?.notes ?? []).filter((item) => item.amount !== "0");
-  const selected = openNotes.find((item) => item.hash === note) ?? openNotes[0];
+  const selectedNotes = openNotes.filter((item) => selectedHashes.includes(item.hash));
+  const labelMint = (mint: string) => (mint === SOL_MINT ? "SOL" : (metadataLabel(metadata[mint]) ?? short(mint)));
   const formBusy = busy !== null || ringSession.busy;
   const resolveMint = useCallback((kind: AssetKind, mint: string) => {
     if (kind === "sol" || assets[mint] !== undefined) return;
@@ -265,7 +270,20 @@ export function Dashboard() {
   ):
     | { readonly ok: true; readonly decision: ReturnType<typeof decideFundingSource> & { readonly ok: true } }
     | { readonly ok: false; readonly error: string } {
-    const note = funding.kind === "shielded" ? openNotes.find((item) => item.hash === funding.noteHash) : undefined;
+    let shieldedHash = funding.kind === "shielded" ? funding.noteHash : undefined;
+    if (selectedHashes.length > 0) {
+      const pick = pickNoteForAction({
+        notes: spendNotes(openNotes),
+        selected: selectedHashes,
+        mint: mine.mint,
+        amount: mine.amount,
+      });
+      if (!pick.ok && (pick.reason === "mixed" || funding.kind === "shielded")) {
+        return { ok: false, error: notePickRefusal(pick, labelMint) };
+      }
+      if (pick.ok && funding.kind === "shielded") shieldedHash = pick.hash;
+    }
+    const note = shieldedHash === undefined ? undefined : openNotes.find((item) => item.hash === shieldedHash);
     const holding = holdings?.find((asset) => asset.mint === mine.mint) ?? null;
     const source =
       funding.kind === "public"
@@ -426,9 +444,23 @@ export function Dashboard() {
     if (stored === undefined) throw new Error(chunkRefusal("missing-terms"));
     const agreed = sideView(row.role, stored).lock;
     const sameMint = openNotes.filter((item) => item.mint === agreed.mint);
-    const selected = sameMint.find((item) => item.hash === (noteHash ?? note));
-    const exact = sameMint.find((item) => item.amount === agreed.amount);
-    const picked = noteHash !== undefined ? selected : selected ?? exact ?? sameMint[0];
+    let lockedHash = noteHash;
+    if (lockedHash === undefined) {
+      const preview = knownAssets?.[agreed.mint] ?? assets[agreed.mint] ?? (agreed.kind === "sol" ? solAssetInfo() : undefined);
+      if (preview === undefined) throw new Error("The asset for this side is not loaded yet.");
+      const previewAmount = parseBaseAmount(amountText, preview.decimals);
+      if (previewAmount === null) throw new Error("Enter an amount above zero that fits the asset.");
+      const pick = pickNoteForAction({
+        notes: spendNotes(openNotes),
+        selected: selectedHashes,
+        mint: agreed.mint,
+        amount: previewAmount,
+      });
+      if (!pick.ok) throw new Error(notePickRefusal(pick, labelMint));
+      lockedHash = pick.hash;
+    }
+    const selected = sameMint.find((item) => item.hash === lockedHash);
+    const picked = selected;
     if (picked === undefined && noteHash === undefined) {
       throw new Error("Shield the asset this side agreed to lock, then pick that note. A note of another asset cannot lock here.");
     }
@@ -445,7 +477,7 @@ export function Dashboard() {
       kind: agreed.kind,
     });
     if (!plan.ok) throw new Error(chunkRefusal(plan.reason));
-    let spendHash = picked?.hash ?? noteHash;
+    let spendHash = picked?.hash ?? lockedHash;
     if (spendHash === undefined) {
       throw new Error("Shield the asset this side agreed to lock, then pick that note. A note of another asset cannot lock here.");
     }
@@ -682,62 +714,83 @@ export function Dashboard() {
       <p className="mt-6 max-w-2xl leading-7 text-muted">
         Connect a wallet to load every pescrow that names it. Ones you opened sit under Issued. Ones that name you as the counterparty sit under Received. SOL, a token, or an NFT can be either side. The ring is permissionless and the wallets are public.
       </p>
-      <RingBalance apiRef={ringApi} paused={busy !== null} onSession={onRingSession} />
-      {busy !== null ? <p className="mt-8 text-sm">{busy}…</p> : null}
-      {notice !== null ? <p className="mt-8 max-w-3xl break-all text-sm leading-6">{notice}</p> : null}
-      {failure !== null ? <p className="mt-8 max-w-3xl break-all text-sm leading-6 text-stamp">{failure}</p> : null}
-      {connected && wallet !== null ? (
-        <NewEscrowForm
-          busy={formBusy}
-          notes={openNotes}
-          holdings={holdings}
-          assets={assets}
-          metadata={metadata}
-          onCreate={(draft) => void openEscrow(draft)}
-          onInvalid={setFailure}
-          onResolveMint={resolveMint}
-        />
+      <RingBalance
+        desk="escrow"
+        apiRef={ringApi}
+        paused={busy !== null}
+        onSession={onRingSession}
+        tab={tab}
+        onTab={setTab}
+        create={
+          connected && wallet !== null ? (
+            <NewEscrowForm
+              busy={formBusy}
+              notes={openNotes}
+              holdings={holdings}
+              assets={assets}
+              metadata={metadata}
+              onCreate={(draft) => void openEscrow(draft)}
+              onInvalid={setFailure}
+              onResolveMint={resolveMint}
+            />
+          ) : (
+            <p className="mt-6 text-sm text-muted">Select a wallet to create an escrow.</p>
+          )
+        }
+        balance={
+          wallet === null ? (
+            <p className="mt-6 text-sm text-muted">Select a wallet to see escrows for that address.</p>
+          ) : (
+            <>
+              <EscrowList
+                title="Issued"
+                empty="You have not opened an escrow from this wallet."
+                rows={groups.issued}
+                terms={terms}
+                assets={assets}
+                metadata={metadata}
+                selectedNotes={selectedNotes}
+                notes={openNotes}
+                holdings={holdings}
+                seedReady={seed !== null}
+                busy={formBusy}
+                onLock={(row, amount) => void lock(row, amount)}
+                onAccept={(row, amount) => void accept(row, amount)}
+                onReject={(row) => void reject(row)}
+                onSaveTerms={(address, role, mine, theirs) => void saveTerms(address, role, mine, theirs)}
+              />
+              <EscrowList
+                title="Received"
+                empty="No open escrow names this wallet as the counterparty."
+                rows={groups.received}
+                terms={terms}
+                assets={assets}
+                metadata={metadata}
+                selectedNotes={selectedNotes}
+                notes={openNotes}
+                holdings={holdings}
+                seedReady={seed !== null}
+                busy={formBusy}
+                onLock={(row, amount) => void lock(row, amount)}
+                onAccept={(row, amount) => void accept(row, amount)}
+                onReject={(row) => void reject(row)}
+                onSaveTerms={(address, role, mine, theirs) => void saveTerms(address, role, mine, theirs)}
+              />
+              <HistorySection rows={groups.history} busy={formBusy} onClose={(row) => void close(row)} />
+            </>
+          )
+        }
+      />
+      {notice !== null ? (
+        <p className="mt-8 max-w-3xl text-sm leading-6 break-all">
+          <LinkedText text={notice} />
+        </p>
       ) : null}
-      {wallet === null ? <p className="mt-12 text-sm text-muted">Select a wallet to see escrows for that address.</p> : null}
-      {wallet === null ? null : (
-        <EscrowList
-          title="Issued"
-          empty="You have not opened an escrow from this wallet."
-          rows={groups.issued}
-          terms={terms}
-          assets={assets}
-          metadata={metadata}
-          selected={selected}
-          notes={openNotes}
-          holdings={holdings}
-          seedReady={seed !== null}
-          busy={formBusy}
-          onLock={(row, amount) => void lock(row, amount)}
-          onAccept={(row, amount) => void accept(row, amount)}
-          onReject={(row) => void reject(row)}
-          onSaveTerms={(address, role, mine, theirs) => void saveTerms(address, role, mine, theirs)}
-        />
-      )}
-      {wallet === null ? null : (
-        <EscrowList
-          title="Received"
-          empty="No open escrow names this wallet as the counterparty."
-          rows={groups.received}
-          terms={terms}
-          assets={assets}
-          metadata={metadata}
-          selected={selected}
-          notes={openNotes}
-          holdings={holdings}
-          seedReady={seed !== null}
-          busy={formBusy}
-          onLock={(row, amount) => void lock(row, amount)}
-          onAccept={(row, amount) => void accept(row, amount)}
-          onReject={(row) => void reject(row)}
-          onSaveTerms={(address, role, mine, theirs) => void saveTerms(address, role, mine, theirs)}
-        />
-      )}
-      {wallet === null ? null : <HistorySection rows={groups.history} busy={formBusy} onClose={(row) => void close(row)} />}
+      {failure !== null ? (
+        <p className="mt-8 max-w-3xl text-sm leading-6 break-all text-stamp">
+          <LinkedText text={failure} />
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -797,6 +850,17 @@ function readTermsMap(value: unknown): Record<string, SwapTerms> {
     }
   }
   return terms;
+}
+
+function spendNotes(notes: readonly { readonly hash: string; readonly mint: string; readonly amount: string }[]): SpendNote[] {
+  const parsed: SpendNote[] = [];
+  for (const item of notes) {
+    if (!/^\d+$/.test(item.amount)) continue;
+    const amount = BigInt(item.amount);
+    if (amount <= BigInt(0)) continue;
+    parsed.push({ hash: item.hash, mint: item.mint, amount });
+  }
+  return parsed;
 }
 
 function readSide(value: unknown): SwapTerms["a"] | null {

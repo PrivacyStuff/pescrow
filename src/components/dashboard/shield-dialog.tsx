@@ -32,7 +32,6 @@ export function ShieldDialog({
   const [mint, setMint] = useState("");
   const [amountFor, setAmountFor] = useState("");
   const [amount, setAmount] = useState("");
-
   useEffect(() => {
     if (!open) return;
     function onKey(event: KeyboardEvent): void {
@@ -63,9 +62,6 @@ export function ShieldDialog({
         <h2 id="shield-title" className="font-serif text-3xl tracking-[-0.03em]">
           Add to private balance
         </h2>
-        <p className="mt-3 text-sm leading-6 text-muted">
-          Shield SOL, a token, or an NFT this wallet holds into its ring. The amount cannot pass the balance.
-        </p>
         {loading ? <p className="mt-4 text-sm text-muted">Reading this wallet…</p> : null}
         {holdings !== null && holdings.length === 0 && !loading && error === null ? (
           <p className="mt-4 text-sm leading-6 text-muted">
