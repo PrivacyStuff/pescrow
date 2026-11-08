@@ -34,6 +34,11 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+
+# Not started. Vesting follows payroll, subscriptions follow vesting.
+/pesting/
+/pubscription/
 
 # vercel
 .vercel
