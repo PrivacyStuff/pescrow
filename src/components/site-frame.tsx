@@ -16,7 +16,7 @@ export function SiteFrame({ children }: { children: ReactNode }) {
         {children}
       </main>
       <footer className="border-t border-line px-6 py-6 text-sm text-muted md:px-10">
-        Private escrow, vesting, and subscriptions. On the list until the tools are ready.
+        Private escrow, payroll, vesting, and subscriptions. On the list until the tools are ready.
       </footer>
     </div>
   );

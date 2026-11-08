@@ -9,6 +9,11 @@ const PRODUCTS = [
       "Hold funds until a condition is met. You do not need the amount, or who is on either side, sitting in a public feed.",
   },
   {
+    name: "Payroll",
+    pitch:
+      "Pay one salary on a cadence. You do not need the amount sitting in a public feed.",
+  },
+  {
     name: "Vesting",
     pitch:
       "Unlock a grant on a schedule. You do not need the cliff, the size, or the recipient on a page anyone can open.",
@@ -43,7 +48,7 @@ export default function Home() {
           Settle the deal. Keep the terms quiet.
         </h2>
         <p className="mt-4 max-w-xl leading-7 text-muted">
-          Escrow, vesting, and subscriptions still have to settle. The size, the
+          Escrow, payroll, vesting, and subscriptions still have to settle. The size, the
           schedule, and both sides do not have to be public for that to happen.
         </p>
         <ul className="mt-8 border-t border-line">
