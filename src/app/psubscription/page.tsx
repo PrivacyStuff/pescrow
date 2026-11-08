@@ -11,5 +11,5 @@ export const metadata: Metadata = {
 };
 
 export default function PsubscriptionPage() {
-  return <ComingDashboard name={tool.id} summary={tool.summary} />;
+  return <ComingDashboard name={tool.title} summary={tool.summary} />;
 }

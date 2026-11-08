@@ -4,22 +4,22 @@ import { WaitlistForm } from "@/components/waitlist-form";
 
 const PRODUCTS = [
   {
-    name: "Escrow",
+    name: "private - escrow (pescrow)",
     pitch:
       "Hold funds until a condition is met. You do not need the amount, or who is on either side, sitting in a public feed.",
   },
   {
-    name: "Payroll",
+    name: "private - payroll (pproll)",
     pitch:
       "Pay one salary on a cadence. You do not need the amount sitting in a public feed.",
   },
   {
-    name: "Vesting",
+    name: "private vesting (pesting)",
     pitch:
       "Unlock a grant on a schedule. You do not need the cliff, the size, or the recipient on a page anyone can open.",
   },
   {
-    name: "Subscription",
+    name: "private - subscription (psub)",
     pitch:
       "Charge on a cadence. You do not need a public list of who pays, how much, or how often.",
   },
@@ -55,7 +55,7 @@ export default function Home() {
           {PRODUCTS.map((product) => (
             <li
               key={product.name}
-              className="grid gap-3 border-b border-line py-8 md:grid-cols-[15rem_1fr] md:gap-12"
+              className="grid gap-3 border-b border-line py-8 md:grid-cols-[24rem_1fr] md:gap-12"
             >
               <h3 className="font-serif text-3xl tracking-[-0.03em]">{product.name}</h3>
               <p className="max-w-xl self-center leading-7 text-muted">{product.pitch}</p>

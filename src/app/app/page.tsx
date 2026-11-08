@@ -30,7 +30,7 @@ export default function ToolsPage(props: PageProps<"/app">) {
                 className="flex h-full flex-col border border-line p-6 transition-colors hover:border-foreground"
               >
                 <p className="text-sm tracking-[0.18em] text-muted uppercase">Open</p>
-                <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em]">{item.id}</h2>
+                <h2 className="mt-8 font-serif text-3xl tracking-[-0.03em]">{item.title}</h2>
                 <p className="mt-4 max-w-md leading-7 text-muted">{item.summary}</p>
               </Link>
             ) : (
@@ -39,7 +39,7 @@ export default function ToolsPage(props: PageProps<"/app">) {
                 className="flex h-full cursor-not-allowed flex-col border border-line p-6 opacity-60 select-none"
               >
                 <p className="text-sm tracking-[0.18em] text-stamp uppercase">Coming soon</p>
-                <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em] text-muted">{item.id}</h2>
+                <h2 className="mt-8 font-serif text-3xl tracking-[-0.03em] text-muted">{item.title}</h2>
                 <p className="mt-4 max-w-md leading-7 text-muted">{item.summary}</p>
               </div>
             )}
