@@ -21,14 +21,17 @@ import { ESCROW_ACCOUNT_SPACE, ESCROW_PROGRAM_ID, LOCK_SEED } from "@/lib/escrow
 import { kindAgrees, solAssetInfo, type AssetInfo } from "@/lib/mint-account";
 import { notePickRefusal, pickNoteForAction, type SpendNote } from "@/lib/note-selection";
 import { metadataLabel, type TokenMetadata } from "@/lib/token-metadata";
+import { withoutSignatures, type TxCopy } from "@/lib/tx-log";
 import { readHeldAssetList, type HeldAsset } from "@/lib/wallet-holdings";
 import { LinkedText } from "./chain-link";
-import { chainRead, fundRingKey, loadAsset, post, rememberAssets, rememberMetadata, shieldedFor, signAndSend } from "./desk-client";
+import { chainRead, deskSignature, fundRingKey, loadAsset, post, rememberAssets, rememberMetadata, sendTracked, shieldedFor } from "./desk-client";
 import { type DeskTab } from "./desk-tabs";
 import { EscrowList } from "./escrow-list";
 import { HistorySection } from "./history-section";
 import { NewEscrowForm, type FundingDraft, type NewEscrowDraft } from "./new-escrow-form";
 import { EMPTY_RING_SESSION, RingBalance, type RingApi, type RingSession } from "./ring-balance";
+import { TX_COPY } from "./tx-copy";
+import { useTxActivity, useTxLog } from "./tx-drawer";
 import type { AssetDraft } from "./types";
 import { formatAsset, formatBase, short } from "./format";
 
@@ -53,6 +56,8 @@ export function Dashboard() {
   const [failure, setFailure] = useState<string | null>(null);
   const [holdings, setHoldings] = useState<readonly HeldAsset[] | null>(null);
   const [tab, setTab] = useState<DeskTab>("balance");
+  const txLog = useTxLog();
+  useTxActivity(busy);
 
   const wallet = publicKey?.toBase58() ?? null;
   const groups = groupEscrows(escrows);
@@ -183,7 +188,7 @@ export function Dashboard() {
         toInstruction(create),
         toInstruction(approve),
       );
-      const signature = await signAndSend(tx, publicKey, signTransaction, (ready) => {
+      const signature = await sendTracked(txLog, TX_COPY.openEscrow, tx, publicKey, signTransaction, (ready) => {
         ready.partialSign(escrow);
       });
       const address = escrow.publicKey.toBase58();
@@ -338,13 +343,19 @@ export function Dashboard() {
       return { ok: true, text: "Shielded the public balance into a private note.", hash: created.hash };
     }
     setBusy("Carving the note to the escrow amount");
-    await fundRingKey(publicKey, seed, signTransaction);
-    const payload = await post({
-      action: "wallet-carve",
-      seed: Buffer.from(seed).toString("hex"),
-      note: decision.noteHash,
-      lamports: decision.amount.toString(),
-    });
+    await fundRingKey(publicKey, seed, signTransaction, txLog);
+    const payload = await txLog.run(
+      TX_COPY.carve,
+      "desk",
+      () =>
+        post({
+          action: "wallet-carve",
+          seed: Buffer.from(seed).toString("hex"),
+          note: decision.noteHash,
+          lamports: decision.amount.toString(),
+        }),
+      deskSignature,
+    );
     const hash = payload.result?.hash;
     if (typeof hash !== "string" || hash.length === 0) {
       throw new Error("The carve did not return the new note. The remainder of the original note stays spendable.");
@@ -387,12 +398,13 @@ export function Dashboard() {
 
   async function decline(row: EscrowView): Promise<void> {
     if (publicKey === null || wallet === null || signTransaction === undefined) return;
-    await sendParty("Declining", "Declined.", declineEscrowInstruction(row.address, wallet), publicKey, signTransaction);
+    await sendParty("Declining", "Declined.", TX_COPY.declineEscrow, declineEscrowInstruction(row.address, wallet), publicKey, signTransaction);
   }
 
   async function sendParty(
     label: string,
     done: string,
+    copy: TxCopy,
     built: BuiltInstruction,
     payer: PublicKey,
     sign: (tx: Transaction) => Promise<Transaction>,
@@ -401,7 +413,7 @@ export function Dashboard() {
     setFailure(null);
     try {
       const tx = new Transaction().add(toInstruction(built));
-      const signature = await signAndSend(tx, payer, sign);
+      const signature = await sendTracked(txLog, copy, tx, payer, sign);
       setNotice(`${done} ${signature}`);
       await refreshEscrows();
     } catch (error) {
@@ -484,20 +496,22 @@ export function Dashboard() {
     if (plan.split) {
       if (picked === undefined) throw new Error("The note to carve is not in the private balance.");
       setBusy("Splitting the note, then locking the chunk");
-      await fundRingKey(publicKey, seed, signTransaction);
+      await fundRingKey(publicKey, seed, signTransaction, txLog);
     }
-    const payload = await post({
-      action: "wallet-lock",
-      seed: Buffer.from(seed).toString("hex"),
-      wallet,
-      escrow: row.address,
-      note: spendHash,
-      lamports: typed.toString(),
-    });
+    const prepareLock = () =>
+      post({
+        action: "wallet-lock",
+        seed: Buffer.from(seed).toString("hex"),
+        wallet,
+        escrow: row.address,
+        note: spendHash,
+        lamports: typed.toString(),
+      });
+    const payload = plan.split ? await txLog.run(TX_COPY.split, "desk", prepareLock, (result) => result.result?.split) : await prepareLock();
     const raw = payload.result?.tx;
     if (typeof raw !== "string") throw new Error("The lock transaction was not returned.");
     const tx = Transaction.from(Buffer.from(raw, "base64"));
-    const signature = await signAndSend(tx, publicKey, signTransaction);
+    const signature = await sendTracked(txLog, TX_COPY.lock, tx, publicKey, signTransaction);
     const split = payload.result?.split;
     const splitNote = typeof split === "string" ? ` Split ${split}.` : "";
     return `Locked ${formatAsset(typed.toString(), agreed.mint, info.decimals)}.${splitNote} ${signature}`;
@@ -539,7 +553,7 @@ export function Dashboard() {
       if (gate.canApprove) {
         setBusy("Approving");
         const tx = new Transaction().add(toInstruction(approveEscrowInstruction(row.address, wallet)));
-        await signAndSend(tx, publicKey, signTransaction);
+        await sendTracked(txLog, TX_COPY.approveEscrow, tx, publicKey, signTransaction);
       }
       if (!row.aSealed) {
         const waiting =
@@ -653,14 +667,20 @@ export function Dashboard() {
       throw new Error("Unlock the ring on both wallets in this browser before the swap. The chain does not store the shielded addresses.");
     }
     try {
-      await fundRingKey(publicKey, seed, signTransaction);
-      const payload = await post({
-        action: "wallet-swap",
-        seed: Buffer.from(seed).toString("hex"),
-        escrow: row.address,
-        toA: row.role === "a" ? mine : other,
-        toB: row.role === "a" ? other : mine,
-      });
+      await fundRingKey(publicKey, seed, signTransaction, txLog);
+      const payload = await txLog.run(
+        TX_COPY.swap,
+        "desk",
+        () =>
+          post({
+            action: "wallet-swap",
+            seed: Buffer.from(seed).toString("hex"),
+            escrow: row.address,
+            toA: row.role === "a" ? mine : other,
+            toB: row.role === "a" ? other : mine,
+          }),
+        deskSignature,
+      );
       const swapSignature = payload.result?.signature;
       if (typeof swapSignature !== "string") throw new Error("The swap did not return a signature.");
       setBusy("Closing");
@@ -682,10 +702,12 @@ export function Dashboard() {
       throw new Error("Connect a wallet before closing.");
     }
     const tx = new Transaction().add(toInstruction(closeEscrowInstruction(row.address, wallet, row.partyA)));
-    const signature = await signAndSend(tx, publicKey, signTransaction);
+    const signature = await sendTracked(txLog, TX_COPY.closeEscrow, tx, publicKey, signTransaction);
     let returned = "";
     if (seed !== null) {
       const back = await post({ action: "wallet-return", seed: Buffer.from(seed).toString("hex"), wallet });
+      const returnSignature = back.result?.signature;
+      if (typeof returnSignature === "string") txLog.record(TX_COPY.returnFees, returnSignature);
       const lamports = back.result?.lamports;
       if (typeof lamports === "string" && lamports !== "0") returned = ` Returned ${formatAsset(lamports, SOL_MINT, 9)} from the ring key.`;
     }
@@ -783,7 +805,7 @@ export function Dashboard() {
       />
       {notice !== null ? (
         <p className="mt-8 max-w-3xl text-sm leading-6 break-all">
-          <LinkedText text={notice} />
+          <LinkedText text={withoutSignatures(notice)} />
         </p>
       ) : null}
       {failure !== null ? (

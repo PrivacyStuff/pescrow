@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Dashboard } from "@/components/dashboard/dashboard";
+import { TxLogProvider } from "@/components/dashboard/tx-drawer";
 import { SiteFrame } from "@/components/site-frame";
 import { WalletFrame } from "@/components/wallet-provider";
 
@@ -13,7 +14,9 @@ export default function PescrowPage() {
   return (
     <SiteFrame>
       <WalletFrame>
-        <Dashboard />
+        <TxLogProvider>
+          <Dashboard />
+        </TxLogProvider>
       </WalletFrame>
     </SiteFrame>
   );

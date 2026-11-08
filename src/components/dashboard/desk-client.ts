@@ -6,6 +6,9 @@ import { SOL_MINT, type AssetKind } from "@/lib/chunk-plan";
 import { RING_FEE_RESERVE, rpcRateLimitMessage } from "@/lib/desk-request";
 import { solAssetInfo, type AssetInfo } from "@/lib/mint-account";
 import { type TokenMetadata } from "@/lib/token-metadata";
+import { afterSigning, type TxCopy } from "@/lib/tx-log";
+import { TX_COPY } from "./tx-copy";
+import type { TxLogApi } from "./tx-drawer";
 import type { AssetDraft, Note } from "./types";
 
 const SHIELDED_KEY = "pescrow-shielded";
@@ -90,6 +93,7 @@ export async function fundRingKey(
   payer: PublicKey,
   seed: Uint8Array,
   sign: (tx: Transaction) => Promise<Transaction>,
+  txLog: TxLogApi,
   extraLamports: bigint = BigInt(0),
 ): Promise<void> {
   if (extraLamports < BigInt(0)) throw new Error("The shield amount is not valid.");
@@ -103,7 +107,7 @@ export async function fundRingKey(
     SystemProgram.transfer({ fromPubkey: payer, toPubkey: ringKey.publicKey, lamports: Number(missing) }),
   );
   try {
-    await signAndSend(tx, payer, sign);
+    await sendTracked(txLog, TX_COPY.fundRingKey, tx, payer, sign);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (/cancel|reject|denied/i.test(message)) {
@@ -129,6 +133,21 @@ export async function signAndSend(
   const signature = submitted.result?.signature;
   if (typeof signature !== "string") throw new Error("The transaction did not return a signature.");
   return signature;
+}
+
+export function sendTracked(
+  txLog: TxLogApi,
+  copy: TxCopy,
+  tx: Transaction,
+  payer: PublicKey,
+  sign: (tx: Transaction) => Promise<Transaction>,
+  afterBlockhash?: (tx: Transaction) => void,
+): Promise<string> {
+  return txLog.run(copy, "wallet", (signed) => signAndSend(tx, payer, afterSigning(sign, signed), afterBlockhash));
+}
+
+export function deskSignature(payload: DeskResult): unknown {
+  return payload.result?.signature;
 }
 
 export function signatureNotice(label: string, signature: unknown): string {

@@ -16,8 +16,10 @@ import { parseBaseAmount } from "@/lib/escrow-params";
 import { kindAgrees, solAssetInfo, type AssetInfo } from "@/lib/mint-account";
 import { notesForRedeem, redeemStopMessage } from "@/lib/note-selection";
 import { type TokenMetadata } from "@/lib/token-metadata";
+import { withoutSignatures } from "@/lib/tx-log";
 import { readHeldAssetList, shieldBaseAmount, type HeldAsset } from "@/lib/wallet-holdings";
 import {
+  deskSignature,
   fundRingKey,
   loadAsset,
   post,
@@ -25,7 +27,7 @@ import {
   rememberAssets,
   rememberMetadata,
   rememberShielded,
-  signAndSend,
+  sendTracked,
   signatureNotice,
 } from "./desk-client";
 import { LinkedText } from "./chain-link";
@@ -34,6 +36,8 @@ import { Fold } from "./fold";
 import { formatAsset, formatBase, short } from "./format";
 import { PrivateBalance } from "./private-balance";
 import { ShieldDialog } from "./shield-dialog";
+import { TX_COPY } from "./tx-copy";
+import { useTxActivity, useTxLog } from "./tx-drawer";
 import type { Note, RingState } from "./types";
 import { WalletBar } from "./wallet-bar";
 
@@ -106,6 +110,8 @@ export function RingBalance(props: RingBalanceProps) {
   const [holdingsLoading, setHoldingsLoading] = useState(false);
   const wallet = publicKey?.toBase58() ?? null;
   const locked = busy !== null || paused;
+  const txLog = useTxLog();
+  useTxActivity(busy);
 
   function chooseTab(next: DeskTab): void {
     if (escrow === null) return;
@@ -254,9 +260,14 @@ export function RingBalance(props: RingBalanceProps) {
       if (amount === null) {
         throw new Error("Enter an amount above zero, up to the balance in this wallet.");
       }
-      await fundRingKey(publicKey, seed, signTransaction, asset.kind === "sol" ? amount : BigInt(0));
+      await fundRingKey(publicKey, seed, signTransaction, txLog, asset.kind === "sol" ? amount : BigInt(0));
       if (asset.kind === "sol") {
-        const payload = await post({ action: "wallet-shield", seed: Buffer.from(seed).toString("hex"), lamports: amount.toString() });
+        const payload = await txLog.run(
+          TX_COPY.shield,
+          "desk",
+          () => post({ action: "wallet-shield", seed: Buffer.from(seed).toString("hex"), lamports: amount.toString() }),
+          deskSignature,
+        );
         setNotice(signatureNotice("Shielded.", payload.result?.signature));
       } else {
         if (info.tokenProgram === null || asset.tokenAccount === null || asset.tokenProgram === null) {
@@ -272,15 +283,22 @@ export function RingBalance(props: RingBalanceProps) {
           createAssociatedTokenAccountIdempotentInstruction(publicKey, destination, ringKey.publicKey, mintKey, tokenProgram),
           createTransferCheckedInstruction(source, mintKey, destination, publicKey, amount, info.decimals, [], tokenProgram),
         );
-        await signAndSend(move, publicKey, signTransaction);
-        const payload = await post({
-          action: "wallet-shield",
-          seed: Buffer.from(seed).toString("hex"),
-          lamports: amount.toString(),
-          mint: asset.mint,
-          tokenAccount: destination.toBase58(),
-          tokenProgram: info.tokenProgram,
-        });
+        await sendTracked(txLog, TX_COPY.moveToken, move, publicKey, signTransaction);
+        const tokenProgramId = info.tokenProgram;
+        const payload = await txLog.run(
+          TX_COPY.shield,
+          "desk",
+          () =>
+            post({
+              action: "wallet-shield",
+              seed: Buffer.from(seed).toString("hex"),
+              lamports: amount.toString(),
+              mint: asset.mint,
+              tokenAccount: destination.toBase58(),
+              tokenProgram: tokenProgramId,
+            }),
+          deskSignature,
+        );
         setNotice(signatureNotice("Shielded.", payload.result?.signature));
       }
       setAssets((current) => ({ ...current, [asset.mint]: info }));
@@ -359,15 +377,21 @@ export function RingBalance(props: RingBalanceProps) {
     const amount = parseBaseAmount(amountText, info.decimals);
     if (amount === null || amount > BigInt(row.amount)) throw new Error("Enter an amount above zero, up to this note.");
     if (row.mint !== SOL_MINT && info.tokenProgram === null) throw new Error("the mint has no token program");
-    await fundRingKey(publicKey, seed, signTransaction);
-    const payload = await post({
-      action: "wallet-withdraw",
-      seed: Buffer.from(seed).toString("hex"),
-      wallet,
-      mint: row.mint,
-      amount: amount.toString(),
-      ...(row.mint === SOL_MINT || info.tokenProgram === null ? {} : { tokenProgram: info.tokenProgram }),
-    });
+    await fundRingKey(publicKey, seed, signTransaction, txLog);
+    const payload = await txLog.run(
+      TX_COPY.redeem,
+      "desk",
+      () =>
+        post({
+          action: "wallet-withdraw",
+          seed: Buffer.from(seed).toString("hex"),
+          wallet,
+          mint: row.mint,
+          amount: amount.toString(),
+          ...(row.mint === SOL_MINT || info.tokenProgram === null ? {} : { tokenProgram: info.tokenProgram }),
+        }),
+      deskSignature,
+    );
     return payload.result?.signature;
   }
 
@@ -402,7 +426,7 @@ export function RingBalance(props: RingBalanceProps) {
       {busy !== null ? <p className="mt-8 text-sm">{busy}…</p> : null}
       {notice !== null ? (
         <p className="mt-8 max-w-3xl text-sm leading-6 break-all">
-          <LinkedText text={notice} />
+          <LinkedText text={withoutSignatures(notice)} />
         </p>
       ) : null}
       {failure !== null && !shieldOpen ? (
