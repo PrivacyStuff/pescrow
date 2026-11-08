@@ -9,7 +9,8 @@ import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import "@solana/wallet-adapter-react-ui/styles.css";
 import "./wallet-modal.css";
 
-const DEVNET = "https://api.devnet.solana.com";
+const RPC_PROXY_PATH = "/api/rpc";
+const SERVER_RPC_ENDPOINT = "http://127.0.0.1/api/rpc";
 const WALLET_STORAGE_KEY = "pescrow-wallet";
 const WALLET_LIST_BUTTON = ".wallet-adapter-modal-list .wallet-adapter-button";
 
@@ -18,8 +19,13 @@ export function WalletFrame({ children }: { children: ReactNode }) {
     () => [new PhantomWalletAdapter(), new SolflareWalletAdapter({ network: WalletAdapterNetwork.Devnet })],
     [],
   );
+  // web3.js Connection requires an http(s) URL, so the browser uses this origin plus /api/rpc.
+  const endpoint = useMemo(
+    () => (typeof window === "undefined" ? SERVER_RPC_ENDPOINT : new URL(RPC_PROXY_PATH, window.location.origin).href),
+    [],
+  );
   return (
-    <ConnectionProvider endpoint={DEVNET}>
+    <ConnectionProvider endpoint={endpoint}>
       <WalletProvider wallets={wallets} autoConnect={false} localStorageKey={WALLET_STORAGE_KEY}>
         <WalletModalProvider>
           <ConnectPickedWallet />

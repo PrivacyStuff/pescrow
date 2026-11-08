@@ -10,6 +10,7 @@ export type EscrowView = {
   readonly aSealed: boolean;
   readonly bSealed: boolean;
   readonly startAt: number;
+  readonly approvalDeadline: number;
   readonly partyA: string;
   readonly partyB: string;
   readonly role: "a" | "b";
@@ -30,8 +31,9 @@ export function decodeEscrow(address: string, data: Uint8Array, wallet: Uint8Arr
     aSealed: data[4] === 1,
     bSealed: data[5] === 1,
     startAt: readI64(data, 8),
-    partyA: base58(partyA),
-    partyB: base58(partyB),
+    approvalDeadline: readI64(data, 16),
+    partyA: encodeBase58(partyA),
+    partyB: encodeBase58(partyB),
     role,
   };
 }
@@ -39,6 +41,16 @@ export function decodeEscrow(address: string, data: Uint8Array, wallet: Uint8Arr
 export function noteMatchesAsk(noteLamports: bigint, askLamports: bigint | null): boolean {
   if (askLamports === null) return true;
   return noteLamports === askLamports;
+}
+
+/** Party A can lock a proposed escrow after their own approval, while B's approval byte is still 0. */
+export function openerCanLock(row: Pick<EscrowView, "status" | "role" | "aApproved" | "bApproved" | "aSealed">): boolean {
+  return row.role === "a" && row.status === "Proposed" && row.aApproved && !row.aSealed;
+}
+
+/** Party B can lock only after A is sealed and B has approved. */
+export function recipientCanLock(row: Pick<EscrowView, "status" | "role" | "aSealed" | "bApproved" | "bSealed">): boolean {
+  return row.role === "b" && row.status === "Proposed" && row.aSealed && row.bApproved && !row.bSealed;
 }
 
 function readI64(data: Uint8Array, offset: number): number {
@@ -87,7 +99,7 @@ export function decodeBase58(value: string): Uint8Array | null {
   return out.length === 32 ? out : null;
 }
 
-function base58(bytes: Uint8Array): string {
+export function encodeBase58(bytes: Uint8Array): string {
   let value = BigInt(0);
   for (const byte of bytes) value = (value << BigInt(8)) + BigInt(byte);
   let out = "";

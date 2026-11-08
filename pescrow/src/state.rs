@@ -178,13 +178,25 @@ impl<'a> Escrow<'a> {
         Ok(())
     }
 
-    /// Both approvals, this party, still inside the window, and not yet sealed.
+    /// Party A may seal after their own approval. Party B may seal only after A is sealed and B has approved.
     fn ready_side(&mut self, signer: &[u8; 32], now: i64) -> Result<Side, EscrowError> {
         self.require_proposed(now)?;
-        if !self.both_approved() {
-            return Err(EscrowError::NotBothApproved);
-        }
         let side = self.side(signer)?;
+        match side {
+            Side::A => {
+                if self.data[OFF_A_APPROVED] != 1 {
+                    return Err(EscrowError::NotBothApproved);
+                }
+            }
+            Side::B => {
+                if self.data[OFF_B_APPROVED] != 1 {
+                    return Err(EscrowError::NotBothApproved);
+                }
+                if !self.a_sealed() {
+                    return Err(EscrowError::OtherSideMissing);
+                }
+            }
+        }
         if self.sealed(side) {
             return Err(EscrowError::SideAlreadySealed);
         }
@@ -306,11 +318,6 @@ impl<'a> Escrow<'a> {
             return Err(EscrowError::TooLate);
         }
         Ok(())
-    }
-
-    /// Both approval bytes are 1.
-    fn both_approved(&self) -> bool {
-        self.data[OFF_A_APPROVED] == 1 && self.data[OFF_B_APPROVED] == 1
     }
 
     /// `A` or `B`. Any other signer is `NotAParty`.

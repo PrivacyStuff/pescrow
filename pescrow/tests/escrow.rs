@@ -334,14 +334,36 @@ fn create_rejects_an_account_that_is_already_open_and_stores_the_bump() {
     assert_eq!(err, EscrowError::AlreadyInitialized);
 }
 
-/// No seal before both approvals, no second seal, and no seal at the deadline.
+/// Party A seals after their own approval. Party B waits until that seal exists.
 #[test]
-fn seal_requires_both_approvals_once_and_before_the_deadline() {
+fn party_a_seals_alone_and_party_b_waits_for_that_seal() {
     let mut early = fresh();
     opened(&mut early);
-    approve(&mut early, &party(1), 100).unwrap();
     let err = Escrow::load(&mut early).unwrap().seal_side(&party(1), 100).unwrap_err();
     assert_eq!(err, EscrowError::NotBothApproved);
+    approve(&mut early, &party(1), 100).unwrap();
+    Escrow::load(&mut early).unwrap().seal_side(&party(1), 100).unwrap();
+    assert!(Escrow::load(&mut early).unwrap().a_sealed());
+    assert!(!Escrow::load(&mut early).unwrap().b_sealed());
+
+    let mut waiting = fresh();
+    both_approved(&mut waiting);
+    let err = Escrow::load(&mut waiting).unwrap().seal_side(&party(2), 100).unwrap_err();
+    assert_eq!(err, EscrowError::OtherSideMissing);
+    Escrow::load(&mut waiting).unwrap().seal_side(&party(1), 100).unwrap();
+    Escrow::load(&mut waiting).unwrap().seal_side(&party(2), 100).unwrap();
+    assert!(Escrow::load(&mut waiting).unwrap().b_sealed());
+
+    let mut unapproved_b = fresh();
+    opened(&mut unapproved_b);
+    approve(&mut unapproved_b, &party(1), 100).unwrap();
+    Escrow::load(&mut unapproved_b).unwrap().seal_side(&party(1), 100).unwrap();
+    let err = Escrow::load(&mut unapproved_b)
+        .unwrap()
+        .seal_side(&party(2), 100)
+        .unwrap_err();
+    assert_eq!(err, EscrowError::NotBothApproved);
+    assert!(!Escrow::load(&mut unapproved_b).unwrap().b_sealed());
 
     let mut data = fresh();
     both_approved(&mut data);

@@ -11,7 +11,7 @@ const APPROVAL_WINDOW_SEC = 6 * 60 * 60;
 const RELEASE_DELAY_SEC = 12 * 60 * 60;
 const CLOCK = "SysvarC1ock11111111111111111111111111111111";
 
-const require = createRequire("/tmp/pescrow-web3/package.json");
+const require = createRequire(import.meta.url);
 const web3 = require("@solana/web3.js") as {
   Connection: new (url: string, commitment: string) => {
     getMinimumBalanceForRentExemption(space: number): Promise<number>;

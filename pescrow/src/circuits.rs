@@ -41,18 +41,23 @@ pub struct Lock {
 impl Circuit for <Lock as ProofInput>::Circuit {
     type Output = CheckedTransaction;
 
-    /// Both approvals are 1 and the side is 0 or 1. The note's owner becomes the PDA.
+    /// Side 0 seals when `a_approved` is 1. Side 1 seals when `b_approved` is 1.
+    /// The other approval byte may be 0. Whether A is already sealed is not a
+    /// public input; the account rejects side B until that seal byte is 1.
     fn circuit(&self) -> Result<Self::Output, CircuitError> {
+        let zero = Uint::<64>::constant(0)?;
         let one = Uint::<64>::constant(1)?;
-        self.public
-            .a_approved
-            .assert_equal(&one, "both parties approve")?;
-        self.public
-            .b_approved
-            .assert_equal(&one, "both parties approve")?;
         self.public
             .side
             .assert_less_or_equal(&one, "the side is a party")?;
+        let side_a = self.public.side.is_equal(&zero)?;
+        let side_b = self.public.side.is_equal(&one)?;
+        self.public
+            .a_approved
+            .assert_equal_if(&one, &side_a, "party A approved")?;
+        self.public
+            .b_approved
+            .assert_equal_if(&one, &side_b, "party B approved")?;
         let mut source = TokenUtxos::new_mut(&self.private.note)?;
         let mut locked = TokenUtxos::new_init(&self.private.pda, &source.asset());
         source.transfer_all(&mut locked)?;

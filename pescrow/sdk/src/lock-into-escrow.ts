@@ -41,7 +41,7 @@ const COMPUTE_UNIT_LIMIT = 1_400_000;
 const TREE_ID = 0;
 const ACCOUNT_LEN = 160;
 
-const require = createRequire("/tmp/pescrow-web3/package.json");
+const require = createRequire(import.meta.url);
 const web3 = require("@solana/web3.js") as Web3Module;
 
 interface WalletFile {
@@ -204,7 +204,10 @@ for (const side of sides) {
   }
   const data = new Uint8Array(account.data);
   if (data[88] !== lockBump) throw new Error(`escrow bump ${data[88]} is not the PDA bump ${lockBump}`);
-  if (data[2] !== 1 || data[3] !== 1) throw new Error("both approvals are required before a lock");
+  if (side.side === 0 && data[2] !== 1) throw new Error("party A has not approved");
+  if (side.side === 1 && (data[3] !== 1 || data[4] !== 1)) {
+    throw new Error("party B can lock only after A is sealed and B has approved");
+  }
   if (data[side.sealAt] !== 0) {
     console.log(`${side.file} already sealed`);
     continue;
