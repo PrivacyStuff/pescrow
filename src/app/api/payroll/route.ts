@@ -122,7 +122,7 @@ async function listBudgets(wallet: string): Promise<{ budgets: VaultView[] }> {
 
 function runScript(script: string, body: Record<string, string>, timeoutMs: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const child = spawn("node", ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "--experimental-strip-types", script], {
+    const child = spawn(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "--experimental-strip-types", script], {
       cwd: PPROLL_DIR,
       timeout: timeoutMs,
     });

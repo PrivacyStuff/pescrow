@@ -54,7 +54,7 @@ function escrowAddress(): string | null {
 
 function runNode(args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("node", args, { cwd: SDK_DIR, env, timeout: timeoutMs });
+    const child = spawn(process.execPath, args, { cwd: SDK_DIR, env, timeout: timeoutMs });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -309,7 +309,7 @@ async function runWallet(request: DeskRequest): Promise<Response> {
   const payload = ringPayload(request);
   if (payload === null) return Response.json({ ok: false, error: "The wallet request is incomplete." }, { status: 400, headers });
   const run = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn("node", ["--import", "./src/wasm-node-preload.mjs", "src/wallet-desk.ts"], {
+    const child = spawn(process.execPath, ["--import", "./src/wasm-node-preload.mjs", "src/wallet-desk.ts"], {
       cwd: SDK_DIR,
       env: process.env,
       timeout: request.action === "wallet-notes" ? STATUS_MS : CHAIN_MS,

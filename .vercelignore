@@ -1,0 +1,18 @@
+# Rust build caches. The desk and payroll routes only read target/zk (proving keys and WASM provers), which must ship.
+/pescrow/target/debug
+/pescrow/target/release
+/pescrow/target/sbpf-solana-solana
+/pescrow/target/zk-wasm-*
+/pescrow/target/flycheck*
+/pescrow/target/tmp
+/pproll/target/debug
+/pproll/target/release
+/pproll/target/sbpf-solana-solana
+/pproll/target/zk-wasm-*
+/pproll/target/flycheck*
+/pproll/target/tmp
+
+/.next
+/node_modules
+.env*.local
+*.tsbuildinfo

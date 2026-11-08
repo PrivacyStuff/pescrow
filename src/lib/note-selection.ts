@@ -49,7 +49,7 @@ export function pickNoteForAction(input: {
 export function notePickRefusal(pick: Exclude<NotePick, { readonly ok: true }>, label: (mint: string) => string): string {
   const needed = label(pick.needed);
   if (pick.reason === "none") return `Select a ${needed} note.`;
-  if (pick.reason === "short") return `None of the selected ${needed} notes cover this amount. Amounts are not combined.`;
+  if (pick.reason !== "mixed") return `None of the selected ${needed} notes cover this amount. Amounts are not combined.`;
   const also = pick.also.map(label).join(", ");
   return `Keep ${needed} selected. ${also} is also selected.`;
 }
