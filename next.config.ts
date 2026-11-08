@@ -12,7 +12,6 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
-  typescript: { ignoreBuildErrors: true },
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
