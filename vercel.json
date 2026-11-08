@@ -1,0 +1,4 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "echo \"PrivacyStuff/pescrow is the escrow program. The website builds from PrivacyStuff/website.\" && exit 0"
+}
