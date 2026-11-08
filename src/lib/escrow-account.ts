@@ -75,6 +75,11 @@ function equal32(left: Uint8Array, right: Uint8Array): boolean {
 const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 export function decodeBase58(value: string): Uint8Array | null {
+  const out = decodeBase58Bytes(value);
+  return out !== null && out.length === 32 ? out : null;
+}
+
+export function decodeBase58Bytes(value: string): Uint8Array | null {
   if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(value)) return null;
   let acc = BigInt(0);
   for (const char of value) {
@@ -96,7 +101,7 @@ export function decodeBase58(value: string): Uint8Array | null {
   bytes.reverse().forEach((byte, index) => {
     out[zeros + index] = byte;
   });
-  return out.length === 32 ? out : null;
+  return out;
 }
 
 export function encodeBase58(bytes: Uint8Array): string {

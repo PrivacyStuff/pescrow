@@ -1,27 +1,27 @@
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
-  createMintToCheckedInstruction,
+  createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { Keypair, PublicKey, SystemProgram, Transaction, type TransactionInstruction } from "@solana/web3.js";
 import { RPC_RATE_LIMIT_MESSAGE, rpcRateLimitMessage } from "@/lib/desk-request";
 import {
-  FAUCET_FEE_RESERVE_LAMPORTS,
   FAUCET_LABEL,
   FAUCET_MAX_BODY_BYTES,
+  FAUCET_PUBLIC_KEY,
   FAUCET_SOL_LAMPORTS,
   FAUCET_USDC_BASE_UNITS,
   FAUCET_USDC_DECIMALS,
   FAUCET_USDC_MINT,
   FaucetLimiter,
+  faucetCanSend,
   faucetEnabled,
-  faucetKeypairPath,
+  faucetKeySource,
   isDevnetGenesis,
   parseFaucetRequest,
-  parseSecretKey,
+  secretKeyCandidates,
   rateLimitMessage,
   type FaucetRequest,
 } from "@/lib/faucet";
@@ -43,14 +43,15 @@ class FaucetRefusal extends Error {
   }
 }
 
-type MintInfo = { mintAuthority: string | null; decimals: number };
-type ParsedMintAccount = { value: { owner: string; data: { parsed?: { type?: string; info?: MintInfo } } } | null };
+type TokenAccountInfo = { mint?: string; owner?: string; tokenAmount?: { amount?: string } };
+type ParsedTokenAccount = { value: { owner: string; data: { parsed?: { type?: string; info?: TokenAccountInfo } } } | null };
 type SignatureStatus = { value: ({ err: unknown; confirmationStatus?: string } | null)[] };
 
 const limiter = new FaucetLimiter();
+const USDC_MINT = new PublicKey(FAUCET_USDC_MINT);
+const NOT_CONFIGURED = "The faucet is not configured.";
 let devnetConfirmed = false;
 let cachedKeypair: Keypair | null = null;
-let mintChecked = false;
 
 export async function POST(request: Request) {
   if (!faucetEnabled(process.env)) return new Response(null, { status: 404 });
@@ -90,21 +91,22 @@ async function drop(request: FaucetRequest): Promise<string> {
   await assertDevnet();
   const faucet = loadFaucetKey();
   const recipient = new PublicKey(request.recipient);
+  if (recipient.equals(faucet.publicKey)) throw new FaucetRefusal("That is the faucet wallet. Use your own address.", 400);
   const balance = await helius<{ value: number }>("getBalance", [faucet.publicKey.toBase58(), { commitment: "confirmed" }]);
   const lamports = BigInt(balance.value);
 
   if (request.asset === "sol") {
-    if (lamports < FAUCET_SOL_LAMPORTS + FAUCET_FEE_RESERVE_LAMPORTS) return airdropFallback(recipient);
+    if (!faucetCanSend("sol", lamports, BigInt(0))) throw new FaucetRefusal("The faucet wallet is out of SOL. Try again later.", 503);
     return send(faucet, [SystemProgram.transfer({ fromPubkey: faucet.publicKey, toPubkey: recipient, lamports: FAUCET_SOL_LAMPORTS })]);
   }
 
-  if (lamports < FAUCET_FEE_RESERVE_LAMPORTS) throw new FaucetRefusal("The faucet is out of SOL for fees. Try again later.", 503);
-  const mint = new PublicKey(FAUCET_USDC_MINT);
-  await assertMintAuthority(faucet.publicKey);
-  const ata = getAssociatedTokenAddressSync(mint, recipient, false, TOKEN_PROGRAM_ID);
+  const source = getAssociatedTokenAddressSync(USDC_MINT, faucet.publicKey, false, TOKEN_PROGRAM_ID);
+  const usdc = await faucetUsdcBalance(source, faucet.publicKey);
+  if (!faucetCanSend("usdc", lamports, usdc)) throw new FaucetRefusal("The faucet wallet is out of USDC or fee SOL. Try again later.", 503);
+  const destination = getAssociatedTokenAddressSync(USDC_MINT, recipient, false, TOKEN_PROGRAM_ID);
   return send(faucet, [
-    createAssociatedTokenAccountIdempotentInstruction(faucet.publicKey, ata, recipient, mint, TOKEN_PROGRAM_ID),
-    createMintToCheckedInstruction(mint, ata, faucet.publicKey, FAUCET_USDC_BASE_UNITS, FAUCET_USDC_DECIMALS, [], TOKEN_PROGRAM_ID),
+    createAssociatedTokenAccountIdempotentInstruction(faucet.publicKey, destination, recipient, USDC_MINT, TOKEN_PROGRAM_ID),
+    createTransferCheckedInstruction(source, USDC_MINT, destination, faucet.publicKey, FAUCET_USDC_BASE_UNITS, FAUCET_USDC_DECIMALS, [], TOKEN_PROGRAM_ID),
   ]);
 }
 
@@ -117,47 +119,57 @@ async function assertDevnet(): Promise<void> {
 
 function loadFaucetKey(): Keypair {
   if (cachedKeypair !== null) return cachedKeypair;
-  const path = faucetKeypairPath(process.env, homedir());
-  if (path === null) {
+  const source = faucetKeySource(process.env);
+  if (source === null) {
     console.error("faucet_config_missing");
-    throw new FaucetRefusal("The faucet is not configured.", 503);
+    throw new FaucetRefusal(NOT_CONFIGURED, 503);
   }
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    console.error("faucet_key_unreadable");
-    throw new FaucetRefusal("The faucet is not configured.", 503);
+  const candidates = secretKeyCandidates(source.kind === "inline" ? source.text : readKeyFile(source.path));
+  if (candidates.length === 0) {
+    console.error("faucet_key_malformed", source.kind);
+    throw new FaucetRefusal(NOT_CONFIGURED, 503);
   }
-  const secret = parseSecretKey(text);
-  if (secret === null) {
-    console.error("faucet_key_malformed");
-    throw new FaucetRefusal("The faucet is not configured.", 503);
+  const keypair = candidates.map(toKeypair).find((candidate) => candidate?.publicKey.toBase58() === FAUCET_PUBLIC_KEY);
+  if (keypair === undefined || keypair === null) {
+    console.error("faucet_key_not_pinned_wallet", source.kind);
+    throw new FaucetRefusal(NOT_CONFIGURED, 503);
   }
-  cachedKeypair = Keypair.fromSecretKey(secret);
+  cachedKeypair = keypair;
   return cachedKeypair;
 }
 
-async function assertMintAuthority(faucet: PublicKey): Promise<void> {
-  if (mintChecked) return;
-  const account = await helius<ParsedMintAccount>("getAccountInfo", [FAUCET_USDC_MINT, { encoding: "jsonParsed", commitment: "confirmed" }]);
-  const info = account.value?.data.parsed?.info;
-  const valid =
-    account.value?.owner === TOKEN_PROGRAM_ID.toBase58() &&
-    account.value.data.parsed?.type === "mint" &&
-    info?.decimals === FAUCET_USDC_DECIMALS &&
-    info.mintAuthority === faucet.toBase58();
-  if (!valid) {
-    console.error("faucet_mint_authority_mismatch");
-    throw new FaucetRefusal("The faucet cannot mint USDC right now.", 503);
+function toKeypair(secret: Uint8Array): Keypair | null {
+  try {
+    return Keypair.fromSecretKey(secret);
+  } catch {
+    return null;
   }
-  mintChecked = true;
 }
 
-async function airdropFallback(recipient: PublicKey): Promise<string> {
-  const signature = await helius<string>("requestAirdrop", [recipient.toBase58(), Number(FAUCET_SOL_LAMPORTS), { commitment: "confirmed" }]);
-  await confirm(signature);
-  return signature;
+function readKeyFile(path: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    console.error("faucet_key_unreadable");
+    throw new FaucetRefusal(NOT_CONFIGURED, 503);
+  }
+}
+
+async function faucetUsdcBalance(source: PublicKey, faucet: PublicKey): Promise<bigint> {
+  const account = await helius<ParsedTokenAccount>("getAccountInfo", [source.toBase58(), { encoding: "jsonParsed", commitment: "confirmed" }]);
+  if (account.value === null) return BigInt(0);
+  const info = account.value.data.parsed?.info;
+  const amount = info?.tokenAmount?.amount;
+  const valid =
+    account.value.owner === TOKEN_PROGRAM_ID.toBase58() &&
+    account.value.data.parsed?.type === "account" &&
+    info?.mint === FAUCET_USDC_MINT &&
+    info.owner === faucet.toBase58();
+  if (!valid || typeof amount !== "string" || !/^\d+$/.test(amount)) {
+    console.error("faucet_usdc_account_invalid");
+    throw new FaucetRefusal("The faucet cannot send USDC right now.", 503);
+  }
+  return BigInt(amount);
 }
 
 async function send(payer: Keypair, instructions: readonly TransactionInstruction[]): Promise<string> {
