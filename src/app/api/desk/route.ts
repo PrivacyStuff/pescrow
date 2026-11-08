@@ -52,9 +52,16 @@ function escrowAddress(): string | null {
   }
 }
 
+const WASM_PRELOAD = "./" + "src/wasm-node-preload.mjs";
+
+function deskNodeArgs(script: string): string[] {
+  const nodeArgs = ["--" + "import", WASM_PRELOAD, script];
+  return nodeArgs;
+}
+
 function runNode(args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("node", args, { cwd: SDK_DIR, env, timeout: timeoutMs });
+    const child = spawn(process.execPath, args, { cwd: SDK_DIR, env, timeout: timeoutMs });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -86,7 +93,7 @@ async function runDesk(request: DeskRequest): Promise<Response> {
       env.NOTE_A = note;
       env.NOTE_B = note;
     }
-    const run = await runNode(["--import", "./src/wasm-node-preload.mjs", script], env, CHAIN_MS);
+    const run = await runNode(deskNodeArgs(script), env, CHAIN_MS);
     const lines = run.stdout.split("\n").map((line) => line.trim()).filter((line) => line.includes("signature="));
     const shown = scrub(lines.length > 0 ? lines.join("\n") : run.stderr || run.stdout).trim();
     if (run.code !== 0) {
@@ -309,7 +316,8 @@ async function runWallet(request: DeskRequest): Promise<Response> {
   const payload = ringPayload(request);
   if (payload === null) return Response.json({ ok: false, error: "The wallet request is incomplete." }, { status: 400, headers });
   const run = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn("node", ["--import", "./src/wasm-node-preload.mjs", "src/wallet-desk.ts"], {
+    const nodeArgs = deskNodeArgs("src/" + "wallet-desk.ts");
+    const child = spawn(process.execPath, nodeArgs, {
       cwd: SDK_DIR,
       env: process.env,
       timeout: request.action === "wallet-notes" ? STATUS_MS : CHAIN_MS,
