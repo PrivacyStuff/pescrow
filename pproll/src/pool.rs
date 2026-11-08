@@ -151,8 +151,13 @@ pub fn open_payroll(data: &mut [u8], args: &OpenPayroll) -> Result<(), PayrollEr
     PayrollAccount::load(data)?.open(args)
 }
 
-pub fn approve_payroll(data: &mut [u8], signer: &[u8; 32], now: i64) -> Result<(), PayrollError> {
-    PayrollAccount::load(data)?.approve(signer, now)
+pub fn approve_payroll(
+    data: &mut [u8],
+    signer: &[u8; 32],
+    now: i64,
+    payee_hash: &[u8; 32],
+) -> Result<(), PayrollError> {
+    PayrollAccount::load(data)?.approve(signer, now, payee_hash)
 }
 
 pub fn stop_payroll(data: &mut [u8], signer: &[u8; 32]) -> Result<(), PayrollError> {

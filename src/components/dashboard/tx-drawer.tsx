@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useId, useMemo, useR
 import {
   errorText,
   isPending,
+  markTxLogged,
   pendingCount,
   reduceTxLog,
   signatureOf,
@@ -20,12 +21,14 @@ import { short } from "./format";
 export type TxLogApi = {
   run: <T>(copy: TxCopy, origin: TxOrigin, send: (signed: () => void) => Promise<T>, pick?: (value: T) => unknown) => Promise<T>;
   record: (copy: TxCopy, signature: string) => void;
+  fail: (copy: TxCopy, message: string) => void;
   setActivity: (key: string, label: string | null) => void;
 };
 
 const NO_TX_LOG: TxLogApi = {
   run: (_copy, _origin, send) => send(() => {}),
   record: () => {},
+  fail: () => {},
   setActivity: () => {},
 };
 
@@ -73,6 +76,7 @@ export function TxLogProvider({ children }: { children: ReactNode }) {
       dispatch({ kind: "confirmed", id, signature: signatureOf(pick === undefined ? value : pick(value)), at: Date.now() });
       return value;
     } catch (error) {
+      markTxLogged(error);
       dispatch({ kind: "failed", id, error: errorText(error, "The transaction failed."), at: Date.now() });
       throw error;
     }
@@ -83,6 +87,15 @@ export function TxLogProvider({ children }: { children: ReactNode }) {
     const at = Date.now();
     dispatch({ kind: "start", id, copy, origin: "desk", at });
     dispatch({ kind: "confirmed", id, signature: signatureOf(signature), at });
+  }, []);
+  const fail = useCallback((copy: TxCopy, message: string) => {
+    const shown = errorText(new Error(message), "The transaction failed.");
+    if (shown.length === 0) return;
+    const id = nextId.current;
+    nextId.current += 1;
+    const at = Date.now();
+    dispatch({ kind: "start", id, copy, origin: "desk", at });
+    dispatch({ kind: "failed", id, error: shown, at });
   }, []);
   const setActivity = useCallback((key: string, label: string | null) => {
     setActivities((current) => {
@@ -95,7 +108,7 @@ export function TxLogProvider({ children }: { children: ReactNode }) {
       return current[key] === label ? current : { ...current, [key]: label };
     });
   }, []);
-  const api = useMemo(() => ({ run, record, setActivity }), [run, record, setActivity]);
+  const api = useMemo(() => ({ run, record, fail, setActivity }), [run, record, fail, setActivity]);
   const activity = Object.values(activities).at(-1) ?? null;
 
   return (

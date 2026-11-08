@@ -16,6 +16,7 @@ import {
   parseBudgetKeyRecord,
   parsePreparedDeposit,
   feePayerSignature,
+  scrubPayrollError,
   selectedBudgetNote,
   signedDepositFailure,
   simulateBudgetDeposit,
@@ -35,6 +36,8 @@ import { BUDGET_HAS_NO_NOTE, budgetCloseOffer, parsePreparedWithdraw } from "@/l
 import { SOL_DECIMALS, SOL_MINT } from "@/lib/chunk-plan";
 import { parseBaseAmount } from "@/lib/escrow-params";
 import {
+  BUDGET_NOTE_TOO_SMALL,
+  MAX_ROLLS,
   MISSING_PAYROLL_KEY,
   NOT_READY_TO_CRANK,
   NOT_READY_TO_FUND,
@@ -42,9 +45,11 @@ import {
   PAYROLL_SIMULATION_FAILED,
   PUT_NOTE_IN_BUDGET,
   MILESTONE_NOT_DUE,
+  budgetForRolls,
   hasPayrollKey,
   parsePreparedRoll,
   payrollStep,
+  rollsInBudget,
   type PayrollStepInput,
 } from "@/lib/payroll-roll";
 import {
@@ -66,12 +71,12 @@ import {
   type VaultView,
 } from "@/lib/payroll-account";
 import { AssetFields } from "./dashboard/asset-fields";
-import { formatAsset } from "./dashboard/format";
+import { formatAsset, formatBase } from "./dashboard/format";
 import { EMPTY_RING_SESSION, RingBalance, type RingApi, type RingSession } from "./dashboard/ring-balance";
 import { TX_COPY } from "./dashboard/tx-copy";
 import { useTxActivity, useTxLog } from "./dashboard/tx-drawer";
 import type { AssetDraft } from "./dashboard/types";
-import { afterSigning, withoutSignatures, type TxCopy } from "@/lib/tx-log";
+import { afterSigning, wasTxLogged, withoutSignatures, type TxCopy } from "@/lib/tx-log";
 
 const PROGRAM_ID = new PublicKey(PPROLL_PROGRAM_ID);
 const CLOCK = new PublicKey("SysvarC1ock11111111111111111111111111111111");
@@ -81,10 +86,16 @@ const TERMS_PREFIX = "pproll-terms:";
 const VAULT_SECRET = "pproll-budget";
 const BUDGET_KEY_EVENT = "pproll-budget-key";
 const FIELD = "mt-2 w-full border border-line bg-transparent px-3 py-2";
+const DEFAULT_ROLLS = "3";
+const DIGITS = /^\d{1,20}$/;
 
 type RollTerms = {
   readonly mint: string;
+  /** Installment per roll, in base units. */
   readonly amount: string;
+  /** Total moved onto the payroll by Fund. Absent on terms saved before multi-roll payrolls. */
+  readonly budget?: string;
+  readonly rolls?: number;
   readonly decimals: number;
   readonly viewingSecretHex: string;
   readonly installmentBlindingHex: string;
@@ -128,6 +139,7 @@ export function PayrollDesk() {
   const [terms, setTerms] = useState<Record<string, RollTerms>>({});
   const [destinataire, setDestinataire] = useState("");
   const [asset, setAsset] = useState<AssetDraft>({ kind: "sol", mint: "", amount: "0.01" });
+  const [rolls, setRolls] = useState(DEFAULT_ROLLS);
   const [cadence, setCadence] = useState<string>(String(PERIOD_HOUR_SECS));
   const [customSeconds, setCustomSeconds] = useState("");
   const [startIn, setStartIn] = useState("");
@@ -179,7 +191,7 @@ export function PayrollDesk() {
         const payload = (await response.json()) as { ok?: boolean; result?: { payrolls?: PayrollView[] }; error?: string };
         if (cancelled) return;
         if (!response.ok || payload.ok === false) {
-          setFailure(payload.error ?? "The payrolls could not be read.");
+          setFailure(scrubPayrollError(payload.error ?? "The payrolls could not be read.").trim() || "The payrolls could not be read.");
           return;
         }
         setPayrolls(payload.result?.payrolls ?? []);
@@ -191,7 +203,7 @@ export function PayrollDesk() {
         const budgetBody = (await budgetPayload.json()) as { ok?: boolean; error?: string; result?: { budgets?: VaultView[] } };
         if (cancelled) return;
         if (!budgetPayload.ok || budgetBody.ok === false) {
-          setFailure(budgetBody.error ?? "The budget could not be read.");
+          setFailure(scrubPayrollError(budgetBody.error ?? "The budget could not be read.").trim() || "The budget could not be read.");
           return;
         }
         setBudgets(budgetBody.result?.budgets ?? []);
@@ -219,6 +231,14 @@ export function PayrollDesk() {
     };
     if (!response.ok || payload.ok === false) throw new Error(payload.error ?? "The payroll command failed.");
     return payload;
+  }
+
+  function reportMoveFailure(copy: TxCopy, error: unknown, fallback: string): void {
+    if (wasTxLogged(error)) return;
+    const raw = error instanceof Error && error.message.length > 0 ? error.message : fallback;
+    const shown = scrubPayrollError(raw).trim();
+    if (shown.length === 0) return;
+    txLog.fail(copy, shown);
   }
 
   async function refresh(): Promise<void> {
@@ -401,6 +421,7 @@ export function PayrollDesk() {
         }
       });
       storeBudgetKeys(wallet, withBudgetMint(readBudgetKeys(wallet), choice.vault, note.mint));
+      setFailure(null);
       setNotice(`The shielded note is in the budget. ${signature}`);
       try {
         const listed = await post({ action: "wallet-budget", wallet });
@@ -410,7 +431,7 @@ export function PayrollDesk() {
         setNotice(`The shielded note is in the budget. Refresh the page to see it. ${signature}`);
       }
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : "The note did not move into the budget.");
+      reportMoveFailure(TX_COPY.depositBudget, error, "The note did not move into the budget.");
     } finally {
       setBusy(null);
     }
@@ -470,6 +491,7 @@ export function PayrollDesk() {
         throw new Error("The budget withdraw did not simulate.");
       }
       const signature = await signAndSubmit(TX_COPY.withdrawBudget, withdrawTx);
+      setFailure(null);
       setNotice(`The shielded note is back in the private balance. ${signature}`);
       setBudgets((current) => current.map((row) => (row.address === choice.vault ? { ...row, funded: false } : row)));
       try {
@@ -481,7 +503,7 @@ export function PayrollDesk() {
         setNotice(`The shielded note is back in the private balance. Refresh the page to see it. ${signature}`);
       }
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : "The budget did not close.");
+      reportMoveFailure(TX_COPY.withdrawBudget, error, "The budget did not close.");
     } finally {
       setBusy(null);
     }
@@ -522,13 +544,19 @@ export function PayrollDesk() {
         setFailure("Enter an amount for the token.");
         return;
       }
+      const budget = budgetForRolls(base, rolls.trim());
+      if (budget === null) {
+        setFailure(`Enter a number of rolls from 1 through ${MAX_ROLLS}.`);
+        return;
+      }
+      const rollCount = Number(rolls.trim());
       const mint = asset.kind === "sol" ? SOL_MINT : asset.mint.trim();
       const prepared = await post({
         action: "prepare-payroll",
         payroll: payroll.publicKey.toBase58(),
         payee: payee.toBase58(),
         installment: base.toString(),
-        budget: base.toString(),
+        budget: budget.toString(),
         startAt: start.toString(),
         periodSecs: String(period),
       });
@@ -540,7 +568,16 @@ export function PayrollDesk() {
         throw new Error("The payroll terms could not be prepared.");
       }
       const saved = readTerms();
-      const record = { mint, amount: base.toString(), decimals, viewingSecretHex, installmentBlindingHex, budgetBlindingHex };
+      const record: RollTerms = {
+        mint,
+        amount: base.toString(),
+        budget: budget.toString(),
+        rolls: rollCount,
+        decimals,
+        viewingSecretHex,
+        installmentBlindingHex,
+        budgetBlindingHex,
+      };
       saved[payroll.publicKey.toBase58()] = record;
       rememberJson(TERMS_KEY, saved);
       rememberJson(`${TERMS_PREFIX}${payroll.publicKey.toBase58()}`, record);
@@ -567,7 +604,9 @@ export function PayrollDesk() {
       tx.recentBlockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
       tx.partialSign(payroll);
       const signature = await signAndSubmit(TX_COPY.openPayroll, tx);
-      setNotice(`Payroll ${payroll.publicKey.toBase58()} is open. Each roll pays ${formatAsset(base.toString(), mint, decimals)} from the budget. ${signature}`);
+      setNotice(
+        `Payroll ${payroll.publicKey.toBase58()} is open. ${rollCount} rolls of ${formatAsset(base.toString(), mint, decimals)}, ${formatAsset(budget.toString(), mint, decimals)} in total, from the budget. ${signature}`,
+      );
       await refresh();
     } catch (error) {
       setFailure(error instanceof Error ? error.message : "The payroll did not open.");
@@ -666,12 +705,16 @@ export function PayrollDesk() {
         vault: budget.vault,
         viewingSecret: roll.viewingSecretHex,
         budgetViewingSecret: budget.viewingSecretHex,
-        budgetAmount: roll.amount,
+        budgetAmount: payrollBudget(roll),
         budgetBlinding: roll.budgetBlindingHex,
+      }).catch((error: unknown) => {
+        if (error instanceof Error && error.message === BUDGET_NOTE_TOO_SMALL) throw new Error(noteTooSmall(roll));
+        throw error;
       });
       const plan = parsePreparedRoll(prepared.result);
       if (plan === null) throw new Error(NOT_READY_TO_FUND);
       const signature = await submitMove(plan, "Signing the payroll funding", TX_COPY.fundPayroll);
+      setFailure(null);
       setNotice(`The budget note is on payroll ${row.address}. The destinataire can crank each roll once it is due. ${signature}`);
       try {
         await refresh();
@@ -681,7 +724,7 @@ export function PayrollDesk() {
         setNotice(`The budget note is on payroll ${row.address}. Refresh the page to see it. ${signature}`);
       }
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : NOT_READY_TO_FUND);
+      reportMoveFailure(TX_COPY.fundPayroll, error, NOT_READY_TO_FUND);
     } finally {
       setBusy(null);
     }
@@ -697,6 +740,10 @@ export function PayrollDesk() {
     }
     if (step.action === "due") {
       setFailure(`The next roll is due at ${when(step.dueAt)}.`);
+      return;
+    }
+    if (step.action === "finished") {
+      setFailure(rollsPaid(step.rolls));
       return;
     }
     if (step.action !== "crank" || roll === undefined) return;
@@ -720,6 +767,7 @@ export function PayrollDesk() {
       const plan = parsePreparedRoll(prepared.result);
       if (plan === null) throw new Error(NOT_READY_TO_CRANK);
       const signature = await submitMove(plan, "Signing the roll", TX_COPY.crankPayroll);
+      setFailure(null);
       setNotice(`Roll paid from ${short(row.address)}. ${signature}`);
       try {
         await refresh();
@@ -727,7 +775,7 @@ export function PayrollDesk() {
         setNotice(`Roll paid from ${short(row.address)}. Refresh the page to see it. ${signature}`);
       }
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : NOT_READY_TO_CRANK);
+      reportMoveFailure(TX_COPY.crankPayroll, error, NOT_READY_TO_CRANK);
     } finally {
       setBusy(null);
     }
@@ -862,6 +910,21 @@ export function PayrollDesk() {
             <input className={FIELD} inputMode="numeric" value={startIn} onChange={(event) => setStartIn(event.target.value)} />
           </label>
           <AssetFields legend="Amount per roll" value={asset} disabled={formBusy} onChange={setAsset} />
+          <label className="mt-4 block max-w-xs text-sm">
+            Number of rolls
+            <input
+              className={FIELD}
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={MAX_ROLLS}
+              step={1}
+              value={rolls}
+              disabled={formBusy}
+              onChange={(event) => setRolls(event.target.value)}
+            />
+          </label>
+          <p className="mt-2 max-w-xl text-sm text-muted">{formTotal(asset, rolls)}</p>
           <button type="button" className="mt-4 border border-foreground px-4 py-2 text-sm disabled:opacity-40" disabled={formBusy} onClick={() => void openPayroll()}>
             Open payroll
           </button>
@@ -939,7 +1002,7 @@ function PayrollList({
           return (
             <li key={row.address} className="text-sm leading-7">
               <p className="break-all">{row.address}</p>
-              {roll !== undefined ? <p>Each roll pays {formatAsset(roll.amount, roll.mint, roll.decimals)}.</p> : null}
+              {roll !== undefined ? <p>{rollSummary(roll)}</p> : null}
               <p className="text-muted">
                 {row.kind === "budget" ? "Budget payroll" : "Per-period salary"} · {row.status} · {periodLabel(row.periodSecs)} · {row.role === "employer" ? "you pay" : "you receive"}
               </p>
@@ -964,6 +1027,7 @@ function PayrollList({
                 </>
               ) : null}
               {step.action === "due" ? <p className="mt-3 text-muted">The next roll is due at {when(step.dueAt)}.</p> : null}
+              {step.action === "finished" ? <p className="mt-3 text-muted">{rollsPaid(step.rolls)}</p> : null}
               {step.action === "missing-payroll-key" ? <p className="mt-3 text-stamp">{MISSING_PAYROLL_KEY}</p> : null}
               {step.action === "missing-budget-key" ? <p className="mt-3 text-stamp">{MISSING_BUDGET_VIEWING_KEY}</p> : null}
               {step.action === "need-note" ? <p className="mt-3 text-muted">{PUT_NOTE_IN_BUDGET}</p> : null}
@@ -1010,9 +1074,13 @@ function rollTerms(value: unknown): RollTerms | null {
   if (typeof row.mint !== "string" || typeof row.amount !== "string" || typeof row.decimals !== "number") return null;
   if (!Number.isInteger(row.decimals) || row.decimals < 0) return null;
   if (typeof row.viewingSecretHex !== "string" || typeof row.installmentBlindingHex !== "string" || typeof row.budgetBlindingHex !== "string") return null;
+  if (row.budget !== undefined && (typeof row.budget !== "string" || !DIGITS.test(row.budget))) return null;
+  if (row.rolls !== undefined && (typeof row.rolls !== "number" || !Number.isInteger(row.rolls) || row.rolls < 1 || row.rolls > MAX_ROLLS)) return null;
   return {
     mint: row.mint,
     amount: row.amount,
+    ...(row.budget === undefined ? {} : { budget: row.budget }),
+    ...(row.rolls === undefined ? {} : { rolls: row.rolls }),
     decimals: row.decimals,
     viewingSecretHex: row.viewingSecretHex,
     installmentBlindingHex: row.installmentBlindingHex,
@@ -1041,8 +1109,46 @@ function stepInput(
     budgetFunded,
     hasPayrollKey: hasPayrollKey(roll ?? null),
     hasBudgetKey: budgetKeyPresent,
+    rollsTotal: roll === undefined ? null : rollsInBudget(roll.amount, roll.budget),
     now,
   };
+}
+
+/** Terms saved before multi-roll payrolls committed the installment as the budget. */
+function payrollBudget(roll: RollTerms): string {
+  return roll.budget ?? roll.amount;
+}
+
+function noteTooSmall(roll: RollTerms): string {
+  const total = formatAsset(payrollBudget(roll), roll.mint, roll.decimals);
+  return `The budget note holds ${total} or less. Funding this payroll needs a note larger than ${total}, because the budget keeps the change.`;
+}
+
+function rollsPaid(rolls: number): string {
+  return rolls === 1 ? "The only roll is paid." : `All ${rolls} rolls are paid.`;
+}
+
+function rollSummary(roll: RollTerms): string {
+  const each = formatAsset(roll.amount, roll.mint, roll.decimals);
+  const count = rollsInBudget(roll.amount, roll.budget);
+  if (count === null || count === 1) return `Each roll pays ${each}.`;
+  return `${count} rolls of ${each}, ${formatAsset(payrollBudget(roll), roll.mint, roll.decimals)} in total.`;
+}
+
+/** Live total for the open form. Token decimals are read only on submit, so tokens use the typed precision. */
+function formTotal(asset: AssetDraft, rollsText: string): string {
+  const text = asset.kind === "nft" ? "1" : asset.amount.trim();
+  const match = /^(\d{1,20})(?:\.(\d{1,18}))?$/.exec(text);
+  if (match === null) return "Enter an amount per roll to see the total.";
+  const fraction = match[2] ?? "";
+  const decimals = asset.kind === "sol" ? SOL_DECIMALS : fraction.length;
+  if (fraction.length > decimals) return "Enter an amount per roll to see the total.";
+  const installment = BigInt(`${match[1]}${fraction.padEnd(decimals, "0")}`);
+  const total = budgetForRolls(installment, rollsText.trim());
+  if (total === null) return `Enter a number of rolls from 1 through ${MAX_ROLLS}.`;
+  if (asset.kind === "sol") return `Total ${formatAsset(total.toString(), SOL_MINT, SOL_DECIMALS)}. The budget note must hold more than this.`;
+  const unit = asset.kind === "nft" ? " NFT" : asset.mint.trim() === "" ? " tokens" : ` · ${short(asset.mint.trim())}`;
+  return `Total ${formatBase(total.toString(), decimals)}${unit}. The budget note must hold more than this.`;
 }
 
 function useClock(): number | null {

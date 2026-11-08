@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AssetInfo } from "@/lib/mint-account";
 import { SOL_DECIMALS, SOL_MINT } from "@/lib/chunk-plan";
 import { metadataLabel, type TokenMetadata } from "@/lib/token-metadata";
@@ -173,8 +173,6 @@ function AssetLine({
   onToggle: (hash: string) => void;
   onCloseEmpty: (hash: string) => void;
 }) {
-  const [open, setOpen] = useState(true);
-  const panelId = useId();
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
       <span className="inline-flex min-w-0 items-center gap-1.5 text-sm">
@@ -183,33 +181,18 @@ function AssetLine({
         <span className="shrink-0 tabular-nums text-muted">{total}</span>
         <span className="max-w-28 truncate text-xs text-muted">{short(mint)}</span>
       </span>
-      {open ? (
-        <ul id={panelId} className="contents">
-          {notes.map((note) => (
-            <NoteChip
-              key={note.hash}
-              note={note}
-              amountText={formatBase(note.amount, noteDecimals(mint, assets))}
-              pressed={selected.includes(note.hash)}
-              onToggle={onToggle}
-              onCloseEmpty={onCloseEmpty}
-            />
-          ))}
-        </ul>
-      ) : (
-        <span id={panelId} className="sr-only">
-          {name} folded
-        </span>
-      )}
-      <button
-        type="button"
-        className="ml-auto shrink-0 font-sans text-sm font-normal text-muted underline-offset-4 hover:underline"
-        aria-expanded={open}
-        aria-controls={panelId}
-        onClick={() => setOpen((current) => !current)}
-      >
-        {open ? "Fold" : "Unfold"}
-      </button>
+      <ul className="contents">
+        {notes.map((note) => (
+          <NoteChip
+            key={note.hash}
+            note={note}
+            amountText={formatBase(note.amount, noteDecimals(mint, assets))}
+            pressed={selected.includes(note.hash)}
+            onToggle={onToggle}
+            onCloseEmpty={onCloseEmpty}
+          />
+        ))}
+      </ul>
     </div>
   );
 }

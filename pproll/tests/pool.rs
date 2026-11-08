@@ -60,7 +60,7 @@ fn move_ix() -> PoolMove<'static> {
 
 fn funded_payroll(payroll: &mut [u8], vault: &mut [u8]) {
     open_payroll(payroll, &payroll_args()).unwrap();
-    approve_payroll(payroll, &wallet(2), 100).unwrap();
+    approve_payroll(payroll, &wallet(2), 100, &hash(4)).unwrap();
     open_vault(vault, &vault_args()).unwrap();
     deposit(vault, &wallet(8), &wallet(1), Some(&SPP_ID), Some(move_ix()), &mut |_| Ok(())).unwrap();
     initiate(
@@ -158,6 +158,26 @@ fn the_pool_holds_one_note() {
     assert_eq!(Vault::load(&mut data).unwrap().live(), LIVE_EMPTY);
 }
 
+/// Open leaves the shielded recipient empty. The payee writes it on approve.
+#[test]
+fn the_payee_binds_the_shielded_address_on_approve() {
+    let mut payroll = fresh_payroll();
+    let mut args = payroll_args();
+    args.payee_hash = [0u8; 32];
+    open_payroll(&mut payroll, &args).unwrap();
+    assert_eq!(PayrollAccount::load(&mut payroll).unwrap().payee_hash(), [0u8; 32]);
+    approve_payroll(&mut payroll, &wallet(1), 100, &hash(9)).unwrap();
+    assert_eq!(PayrollAccount::load(&mut payroll).unwrap().payee_hash(), [0u8; 32]);
+    let missing = approve_payroll(&mut payroll, &wallet(2), 100, &[0u8; 32]).unwrap_err();
+    assert_eq!(missing, pproll::PayrollError::BadAccount);
+    approve_payroll(&mut payroll, &wallet(2), 100, &hash(4)).unwrap();
+    assert_eq!(PayrollAccount::load(&mut payroll).unwrap().payee_hash(), hash(4));
+    assert_eq!(payroll[3], 1);
+    assert_eq!(payroll[4], 1);
+    let replaced = approve_payroll(&mut payroll, &wallet(2), 100, &hash(9)).unwrap_err();
+    assert_eq!(replaced, pproll::PayrollError::BadAccount);
+}
+
 /// Opening signs the employer on. Only the payee still has to accept.
 #[test]
 fn opening_counts_as_the_employer_approval() {
@@ -166,7 +186,7 @@ fn opening_counts_as_the_employer_approval() {
     assert_eq!(payroll[2], 1);
     assert_eq!(payroll[3], 0);
     assert_eq!(payroll[4], 0);
-    approve_payroll(&mut payroll, &wallet(2), 100).unwrap();
+    approve_payroll(&mut payroll, &wallet(2), 100, &hash(4)).unwrap();
     assert_eq!(payroll[3], 1);
     assert_eq!(payroll[4], 1);
 }

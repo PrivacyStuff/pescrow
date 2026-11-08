@@ -362,15 +362,24 @@ fn open_payroll_account(program_id: &Address, accounts: &mut [AccountView], rest
     Ok(())
 }
 
-fn approve_payroll_account(program_id: &Address, accounts: &mut [AccountView], _rest: &[u8]) -> ProgramResult {
+fn approve_payroll_account(program_id: &Address, accounts: &mut [AccountView], rest: &[u8]) -> ProgramResult {
     let now = read_clock(accounts.get(2).ok_or(ProgramError::NotEnoughAccountKeys)?)?;
     let (payroll, party) = writable_pair(program_id, accounts, PAYROLL_LEN)?;
     if !party.is_signer() {
         return Err(map_error(PayrollError::NotAParty));
     }
+    let payee_hash = match rest.len() {
+        0 => [0u8; 32],
+        32 => {
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(rest);
+            hash
+        }
+        _ => return Err(map_error(PayrollError::BadAccount)),
+    };
     let mut scratch = [0u8; PAYROLL_LEN];
     scratch.copy_from_slice(&payroll.try_borrow()?);
-    approve_payroll(&mut scratch, party.address().as_array(), now).map_err(map_error)?;
+    approve_payroll(&mut scratch, party.address().as_array(), now, &payee_hash).map_err(map_error)?;
     accounts[0].try_borrow_mut()?.copy_from_slice(&scratch);
     Ok(())
 }
