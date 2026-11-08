@@ -51,7 +51,7 @@ const SPLIT_MAX_PARTS = 8;
 const RESERVE_TTL_MS = 180_000n;
 const CHUNK_SYNC_ATTEMPTS = 8;
 
-const require = createRequire("/tmp/pescrow-web3/package.json");
+const require = createRequire(import.meta.url);
 const web3 = require("@solana/web3.js") as Web3Module;
 
 interface AccountMeta {

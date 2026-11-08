@@ -33,7 +33,7 @@ const MAX_LAMPORTS = 1_000_000_000n;
 const CLOCK = "SysvarC1ock11111111111111111111111111111111";
 const SIDES = { a: "party-a.json", b: "party-b.json" } as const;
 
-const require = createRequire("/tmp/pescrow-web3/package.json");
+const require = createRequire(import.meta.url);
 const web3 = require("@solana/web3.js") as {
   Connection: new (url: string, commitment: string) => {
     getBalance(key: { toBase58(): string }): Promise<number>;

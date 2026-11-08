@@ -37,7 +37,7 @@ const ACCOUNT_LEN = 160;
 const COMMIT_A = 96;
 const COMMIT_B = 128;
 
-const require = createRequire("/tmp/pescrow-web3/package.json");
+const require = createRequire(import.meta.url);
 const web3 = require("@solana/web3.js") as Web3Module;
 
 interface WalletFile {
