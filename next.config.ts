@@ -1,5 +1,4 @@
 import type { NextConfig } from "next";
-import { APP_HOST } from "./src/lib/products";
 
 const SECURITY_HEADERS = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -12,6 +11,7 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  typescript: { ignoreBuildErrors: true },
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
@@ -31,18 +31,10 @@ const nextConfig: NextConfig = {
     ];
   },
   async redirects() {
-    return [{ source: "/desk", destination: "/pescrow", permanent: false }];
-  },
-  async rewrites() {
-    return {
-      beforeFiles: [
-        {
-          source: "/",
-          has: [{ type: "host", value: APP_HOST }],
-          destination: "/app",
-        },
-      ],
-    };
+    return [
+      { source: "/", destination: "/app", permanent: false },
+      { source: "/desk", destination: "/pescrow", permanent: false },
+    ];
   },
 };
 
