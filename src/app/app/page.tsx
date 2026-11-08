@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Suspense } from "react";
+import { FaucetPanel } from "@/components/faucet-panel";
 import { SiteFrame } from "@/components/site-frame";
-import { PRODUCTS } from "@/lib/products";
-import { demoVideoId } from "@/lib/youtube-id";
+import { WalletFrame } from "@/components/wallet-provider";
+import { product, type ProductId } from "@/lib/products";
 
 export const metadata: Metadata = {
   title: "Privacy — tools",
@@ -11,7 +11,29 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default function ToolsPage(props: PageProps<"/app">) {
+const PESCREW_DEMO_VIDEO_ID = "HJSxfTVivUc";
+const PPROLL_DEMO_VIDEO_ID = "6hG4TzfDCzI";
+
+/** Matches the allow list YouTube puts on a normal embed. The src does not autoplay. */
+const YOUTUBE_EMBED_ALLOW =
+  "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+
+const DEMO_ROWS = [
+  {
+    id: "pproll",
+    videoId: PPROLL_DEMO_VIDEO_ID,
+    description: "One salary, one period at a time. The installment stays hidden. The wallets, the start, and the period stay public.",
+  },
+  {
+    id: "pescrow",
+    videoId: PESCREW_DEMO_VIDEO_ID,
+    description: "Swap two notes. The price stays hidden. Both wallets and the deadline stay public.",
+  },
+] as const satisfies readonly { id: ProductId; videoId: string; description: string }[];
+
+const CLOSED_IDS = ["psubscription", "pvesting"] as const satisfies readonly ProductId[];
+
+export default function ToolsPage() {
   return (
     <SiteFrame>
       <p className="text-sm tracking-[0.18em] text-stamp uppercase">Tools</p>
@@ -21,63 +43,80 @@ export default function ToolsPage(props: PageProps<"/app">) {
       <p className="mt-8 max-w-xl text-lg leading-8 text-muted">
         Escrow and payroll open. Subscription and vesting are not ready yet.
       </p>
-      <ul className="mt-16 grid gap-4 sm:grid-cols-2">
-        {PRODUCTS.map((item) => (
-          <li key={item.id} className="min-h-56">
-            {item.ready ? (
-              <Link
-                href={item.href}
-                className="flex h-full flex-col border border-line p-6 transition-colors hover:border-foreground"
-              >
-                <p className="text-sm tracking-[0.18em] text-muted uppercase">Open</p>
-                <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em]">{item.id}</h2>
-                <p className="mt-4 max-w-md leading-7 text-muted">{item.summary}</p>
-              </Link>
-            ) : (
-              <div
-                aria-disabled="true"
-                className="flex h-full cursor-not-allowed flex-col border border-line p-6 opacity-60 select-none"
-              >
-                <p className="text-sm tracking-[0.18em] text-stamp uppercase">Coming soon</p>
-                <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em] text-muted">{item.id}</h2>
-                <p className="mt-4 max-w-md leading-7 text-muted">{item.summary}</p>
-              </div>
-            )}
+      <ul className="mt-16 grid items-start gap-4 sm:grid-cols-2">
+        {DEMO_ROWS.map((demo) => (
+          <DemoRow key={demo.id} demo={demo} />
+        ))}
+        {CLOSED_IDS.map((id) => (
+          <li key={id} className="min-h-56">
+            <ProductCard item={product(id)} />
           </li>
         ))}
-        <li className="sm:col-span-2">
-          <Suspense fallback={<DemoCard videoId={null} />}>
-            <DemoSlot searchParams={props.searchParams} />
-          </Suspense>
+        <li className="min-h-56 min-w-0">
+          <WalletFrame>
+            <FaucetPanel layout="card" />
+          </WalletFrame>
         </li>
       </ul>
     </SiteFrame>
   );
 }
 
-async function DemoSlot({ searchParams }: { searchParams: PageProps<"/app">["searchParams"] }) {
-  const params = await searchParams;
-  return <DemoCard videoId={demoVideoId(params.v, process.env.DEMO_YOUTUBE_ID)} />;
+function DemoRow({ demo }: { demo: (typeof DEMO_ROWS)[number] }) {
+  return (
+    <>
+      <li className="min-h-56">
+        <ProductCard item={product(demo.id)} />
+      </li>
+      <li className="min-w-0">
+        <DemoCard demo={demo} />
+      </li>
+    </>
+  );
 }
 
-function DemoCard({ videoId }: { videoId: string | null }) {
+function ProductCard({ item }: { item: ReturnType<typeof product> }) {
+  if (item.ready) {
+    return (
+      <Link
+        href={item.href}
+        className="flex h-full flex-col border border-line p-6 transition-colors hover:border-foreground"
+      >
+        <p className="text-sm tracking-[0.18em] text-muted uppercase">Open</p>
+        <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em]">{item.id}</h2>
+        <p className="mt-4 max-w-md leading-7 text-muted">{item.summary}</p>
+      </Link>
+    );
+  }
+
   return (
-    <article className="border border-line p-6">
+    <div
+      aria-disabled="true"
+      className="flex h-full cursor-not-allowed flex-col border border-line p-6 opacity-60 select-none"
+    >
+      <p className="text-sm tracking-[0.18em] text-stamp uppercase">Coming soon</p>
+      <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em] text-muted">{item.id}</h2>
+      <p className="mt-4 max-w-md leading-7 text-muted">{item.summary}</p>
+    </div>
+  );
+}
+
+function DemoCard({ demo }: { demo: (typeof DEMO_ROWS)[number] }) {
+  return (
+    <article className="flex h-full min-w-0 flex-col border border-line p-6">
       <p className="text-sm tracking-[0.18em] text-stamp uppercase">Demo</p>
-      <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em]">Watch the walkthrough</h2>
-      <div className="mt-6 aspect-video border border-line bg-background">
-        {videoId === null ? (
-          <p className="flex h-full items-center px-6 text-muted">The walkthrough will play in this frame.</p>
-        ) : (
-          <iframe
-            className="h-full w-full"
-            src={`https://www.youtube-nocookie.com/embed/${videoId}`}
-            title="Privacy walkthrough"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            referrerPolicy="strict-origin-when-cross-origin"
-            allowFullScreen
-          />
-        )}
+      <h2 className="mt-8 font-serif text-4xl tracking-[-0.03em]">{demo.id}</h2>
+      <p className="mt-4 leading-7 text-muted">{demo.description}</p>
+      <div className="mt-6 aspect-video overflow-hidden border border-line bg-background">
+        <iframe
+          className="h-full w-full"
+          src={`https://www.youtube-nocookie.com/embed/${demo.videoId}`}
+          title={`${demo.id} demo. ${demo.description}`}
+          loading="lazy"
+          allow={YOUTUBE_EMBED_ALLOW}
+          referrerPolicy="strict-origin-when-cross-origin"
+          allowFullScreen
+        />
       </div>
     </article>
   );

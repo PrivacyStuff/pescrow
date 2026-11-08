@@ -20,6 +20,13 @@ const PRODUCTS = [
   },
 ] as const;
 
+const OUTLINE_BUTTON_CLASS =
+  "inline-flex h-12 items-center border border-foreground px-5 text-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground";
+
+const MLH_SUBMISSION_URL =
+  "https://www.mlh.com/events/solana-hackathon/submissions/01a1bc4e-3593-223b-303b-d6d48c56a94b";
+const CODEBASE_URL = "https://github.com/orgs/PrivacyStuff/repositories";
+
 export default function Home() {
   return (
     <SiteFrame>
@@ -32,12 +39,27 @@ export default function Home() {
         there is something you can actually use.
       </p>
       <WaitlistForm />
-      <Link
-        href="/app"
-        className="mt-4 inline-flex h-12 items-center self-start border border-foreground px-5 text-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
-      >
-        Test the app
-      </Link>
+      <div className="mt-4 flex flex-wrap gap-3">
+        <Link href="/app" className={OUTLINE_BUTTON_CLASS}>
+          Test the app
+        </Link>
+        <a
+          href={MLH_SUBMISSION_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={OUTLINE_BUTTON_CLASS}
+        >
+          MLH submission
+        </a>
+        <a
+          href={CODEBASE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={OUTLINE_BUTTON_CLASS}
+        >
+          Codebase
+        </a>
+      </div>
       <section className="mt-20 border-t border-line pt-10">
         <h2 className="max-w-xl font-serif text-3xl tracking-[-0.03em] md:text-4xl">
           Settle the deal. Keep the terms quiet.
