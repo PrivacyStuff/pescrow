@@ -100,10 +100,34 @@ pub fn proved_initiate(
     })
 }
 
+pub fn proved_allowance(
+    payroll_data: &[u8],
+    vault_data: &[u8],
+    now: i64,
+) -> Result<ProvedPay, PayrollError> {
+    if vault_data.len() != VAULT_LEN {
+        return Err(PayrollError::BadAccount);
+    }
+    let mut vault_owned = [0u8; VAULT_LEN];
+    vault_owned.copy_from_slice(vault_data);
+    let pool = Vault::load(&mut vault_owned)?.owner_hash();
+    proved_pay_to(payroll_data, now, true, pool)
+}
+
 pub fn proved_pay(
     payroll_data: &[u8],
     payroll: &[u8; 32],
     now: i64,
+) -> Result<ProvedPay, PayrollError> {
+    let _ = payroll;
+    proved_pay_to(payroll_data, now, false, [0u8; 32])
+}
+
+fn proved_pay_to(
+    payroll_data: &[u8],
+    now: i64,
+    allowance: bool,
+    pool: [u8; 32],
 ) -> Result<ProvedPay, PayrollError> {
     let mut owned = [0u8; PAYROLL_LEN];
     if payroll_data.len() != PAYROLL_LEN {
@@ -111,13 +135,19 @@ pub fn proved_pay(
     }
     owned.copy_from_slice(payroll_data);
     let account = PayrollAccount::load(&mut owned)?;
-    let due = claim_at(account.start_at(), account.period_secs(), account.next_redeem())?;
-    let _ = (payroll, now);
+    let index = if allowance {
+        account.next_allowance()
+    } else {
+        account.next_redeem()
+    };
+    let due = claim_at(account.start_at(), account.period_secs(), index)?;
+    let _ = now;
+    let payee = if allowance { pool } else { account.payee_hash() };
     Ok(ProvedPay {
-        index: u64::from(account.next_redeem()),
+        index: u64::from(index),
         due: u64::try_from(due).map_err(|_| PayrollError::BadAccount)?,
         installment: account.installment(),
-        payee: account.payee_hash(),
+        payee,
     })
 }
 
@@ -248,6 +278,34 @@ pub fn initiate(
     invoke(move_ix.transact)?;
     Vault::load(vault_data)?.set_live(move_ix.keeps_note)?;
     PayrollAccount::load(payroll_data)?.mark_funded()
+}
+
+/// The employer peels one installment into their own pool. The remainder stays on the payroll note.
+///
+/// `stop` then `reclaim` is the only path that moves the rest. A second call in the same period is `TooEarly`.
+pub fn allowance(
+    payroll_data: &mut [u8],
+    vault_data: &[u8],
+    signer: &[u8; 32],
+    now: i64,
+    privacy_program: Option<&[u8; 32]>,
+    move_ix: Option<PoolMove<'_>>,
+    invoke: &mut dyn FnMut(&[u8]) -> Result<(), PayrollError>,
+) -> Result<(), PayrollError> {
+    require_spp(privacy_program)?;
+    let mut vault_owned = [0u8; VAULT_LEN];
+    if vault_data.len() != VAULT_LEN {
+        return Err(PayrollError::BadAccount);
+    }
+    vault_owned.copy_from_slice(vault_data);
+    if Vault::load(&mut vault_owned)?.owner() != signer {
+        return Err(PayrollError::NotAParty);
+    }
+    let _due = PayrollAccount::load(payroll_data)?.allowance_ready(signer, now)?;
+    let transact = transact(move_ix)?;
+    let _public = proved_allowance(payroll_data, vault_data, now)?;
+    invoke(transact)?;
+    PayrollAccount::load(payroll_data)?.commit_allowance()
 }
 
 /// The payee peels the committed installment. The employer cannot call this.

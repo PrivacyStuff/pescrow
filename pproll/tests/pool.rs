@@ -1,6 +1,7 @@
 use pproll::{
-    approve_payroll, deposit, initiate, join, open_payroll, open_vault, pay, reclaim, stop_payroll,
-    withdraw, InitiateMove, OpenPayroll, OpenVault, PayrollAccount, PoolMove, Ring, Stream, Vault,
+    allowance, approve_payroll, deposit, initiate, join, open_payroll, open_vault, pay, reclaim,
+    stop_payroll, withdraw, InitiateMove, OpenPayroll, OpenVault, PayrollAccount, PoolMove, Ring,
+    Stream, Vault,
     Wallets, LIVE_EMPTY, LIVE_NOTE, PAYROLL_LEN, PAYROLL_TAG, PERIOD_LEN, STREAM_LEN, STREAM_TAG,
     VAULT_LEN, VAULT_TAG, SPP_ID,
 };
@@ -230,6 +231,81 @@ fn only_the_payee_can_pay_and_only_at_the_milestone() {
     )
     .unwrap();
     assert_eq!(PayrollAccount::load(&mut payroll).unwrap().next_redeem(), 1);
+}
+
+/// The employer can peel one installment into the pool. The rest stays until stop.
+#[test]
+fn the_employer_can_take_one_allowance_per_period() {
+    let mut payroll = fresh_payroll();
+    let mut vault = fresh_vault();
+    funded_payroll(&mut payroll, &mut vault);
+    let payee = allowance(
+        &mut payroll,
+        &vault,
+        &wallet(2),
+        1_100,
+        Some(&SPP_ID),
+        Some(move_ix()),
+        &mut |_| Ok(()),
+    )
+    .unwrap_err();
+    assert_eq!(payee, pproll::PayrollError::NotAParty);
+    let early = allowance(
+        &mut payroll,
+        &vault,
+        &wallet(1),
+        1_099,
+        Some(&SPP_ID),
+        Some(move_ix()),
+        &mut |_| Ok(()),
+    )
+    .unwrap_err();
+    assert_eq!(early, pproll::PayrollError::TooEarly);
+    allowance(
+        &mut payroll,
+        &vault,
+        &wallet(1),
+        1_100,
+        Some(&SPP_ID),
+        Some(move_ix()),
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(PayrollAccount::load(&mut payroll).unwrap().next_allowance(), 1);
+    assert_eq!(PayrollAccount::load(&mut payroll).unwrap().next_redeem(), 0);
+    let again = allowance(
+        &mut payroll,
+        &vault,
+        &wallet(1),
+        1_100,
+        Some(&SPP_ID),
+        Some(move_ix()),
+        &mut |_| Ok(()),
+    )
+    .unwrap_err();
+    assert_eq!(again, pproll::PayrollError::TooEarly);
+    pay(
+        &mut payroll,
+        &wallet(9),
+        &wallet(2),
+        1_100,
+        Some(&SPP_ID),
+        Some(move_ix()),
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    stop_payroll(&mut payroll, &wallet(1)).unwrap();
+    let stopped = allowance(
+        &mut payroll,
+        &vault,
+        &wallet(1),
+        1_200,
+        Some(&SPP_ID),
+        Some(move_ix()),
+        &mut |_| Ok(()),
+    )
+    .unwrap_err();
+    assert_eq!(stopped, pproll::PayrollError::Stopped);
 }
 
 /// Stop blocks a later pay. Reclaim waits for that stop.

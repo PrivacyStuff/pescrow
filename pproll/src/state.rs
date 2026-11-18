@@ -507,8 +507,8 @@ pub const OWNER_HASH_LEN: usize = 32;
 
 /// 0 tag, 1 live note (0 empty, 1 one note), 8 owner, 40 owner hash, 72 viewing key.
 pub const VAULT_LEN: usize = 112;
-/// Schedule, parties, both commitments, the note owner hash, the payee owner hash, the viewing key, `next_redeem`.
-pub const PAYROLL_LEN: usize = 264;
+/// Schedule, parties, both commitments, the note owner hash, the payee owner hash, the viewing key, `next_redeem`, `next_allowance`.
+pub const PAYROLL_LEN: usize = 268;
 
 const VAULT_OFF_LIVE: usize = 1;
 const VAULT_OFF_OWNER: usize = 8;
@@ -532,6 +532,7 @@ const PAY_OFF_INSTALLMENT: usize = 160;
 const PAY_OFF_BUDGET: usize = 192;
 const PAY_OFF_VIEW: usize = 224;
 const PAY_OFF_NEXT: usize = 260;
+const PAY_OFF_ALLOWANCE: usize = 264;
 
 /// The vault has no note, or it already has one.
 pub const LIVE_EMPTY: u8 = 0;
@@ -823,6 +824,34 @@ impl<'a> PayrollAccount<'a> {
         Ok(())
     }
 
+    /// The employer, one installment, at the same milestone as that index's pay.
+    ///
+    /// This does not advance `next_redeem`. The payee can still be paid for that period.
+    pub fn allowance_ready(&self, signer: &[u8; 32], now: i64) -> Result<i64, PayrollError> {
+        self.require_tag()?;
+        if signer != self.employer() {
+            return Err(PayrollError::NotAParty);
+        }
+        if self.data[PAY_OFF_STATUS] == Status::Stopped as u8 {
+            return Err(PayrollError::Stopped);
+        }
+        if self.data[PAY_OFF_STATUS] != Status::Active as u8 {
+            return Err(PayrollError::NotFunded);
+        }
+        let due = claim_at(self.start_at(), self.period_secs(), self.next_allowance())?;
+        if now < due {
+            return Err(PayrollError::TooEarly);
+        }
+        Ok(due)
+    }
+
+    /// Advances `next_allowance` after one installment moves to the employer's pool.
+    pub fn commit_allowance(&mut self) -> Result<(), PayrollError> {
+        let next = self.next_allowance().checked_add(1).ok_or(PayrollError::Overflow)?;
+        write_u32(self.data, PAY_OFF_ALLOWANCE, next);
+        Ok(())
+    }
+
     /// The employer blocks later pays. The budget note stays until `reclaim`.
     pub fn stop(&mut self, signer: &[u8; 32]) -> Result<(), PayrollError> {
         self.require_tag()?;
@@ -890,6 +919,10 @@ impl<'a> PayrollAccount<'a> {
 
     pub fn next_redeem(&self) -> u32 {
         u32_at(self.data, PAY_OFF_NEXT)
+    }
+
+    pub fn next_allowance(&self) -> u32 {
+        u32_at(self.data, PAY_OFF_ALLOWANCE)
     }
 
     pub fn status_byte(&self) -> u8 {

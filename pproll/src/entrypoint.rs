@@ -10,10 +10,10 @@ use spr_program::CompressedProof;
 
 use crate::error::PayrollError;
 use crate::pool::{
-    approve_payroll, deposit, initiate, join, open_payroll, open_vault, parse_initiate,
-    parse_open_payroll, parse_open_vault, parse_pool_move, pay, proved_initiate, proved_pay,
-    proved_reclaim, proved_vault, reclaim, stop_payroll, withdraw, INITIATE_HEADER, PAYROLL_NOTE_SEED,
-    POOL_SEED,
+    allowance, approve_payroll, deposit, initiate, join, open_payroll, open_vault, parse_initiate,
+    parse_open_payroll, parse_open_vault, parse_pool_move, pay, proved_allowance, proved_initiate,
+    proved_pay, proved_reclaim, proved_vault, reclaim, stop_payroll, withdraw, INITIATE_HEADER,
+    PAYROLL_NOTE_SEED, POOL_SEED,
 };
 use crate::processor::{
     process, proved_claim, proved_fund, Instruction, CIRCUIT_PROOF_LEN, CLAIM_HEADER, FUND_HEADER,
@@ -53,6 +53,7 @@ fn process_instruction(
         14 => return pay_note(program_id, accounts, rest),
         15 => return stop_payroll_account(program_id, accounts),
         16 => return reclaim_note(program_id, accounts, rest),
+        17 => return allowance_note(program_id, accounts, rest),
         _ => return Err(ProgramError::InvalidInstructionData),
     };
     if matches!(instruction, Instruction::Fund | Instruction::Claim) {
@@ -592,6 +593,60 @@ fn pay_note(program_id: &Address, accounts: &mut [AccountView], rest: &[u8]) -> 
     )
     .map_err(map_error)?;
     accounts[0].try_borrow_mut()?.copy_from_slice(&scratch);
+    Ok(())
+}
+
+fn allowance_note(program_id: &Address, accounts: &mut [AccountView], rest: &[u8]) -> ProgramResult {
+    let (head, spp) = split_tail(program_id, accounts, 4, PAYROLL_LEN)?;
+    require_spp(spp)?;
+    if head[1].data_len() != VAULT_LEN || !head[1].owned_by(program_id) {
+        return Err(ProgramError::InvalidAccountData);
+    }
+    let employer = *head[2].address().as_array();
+    if !head[2].is_signer() {
+        return Err(map_error(PayrollError::NotAParty));
+    }
+    let now = read_clock(&head[3])?;
+    let (proof, transact, tx_hash) = split_proof(rest, 0)?;
+    let mut payroll_scratch = [0u8; PAYROLL_LEN];
+    let mut vault_scratch = [0u8; VAULT_LEN];
+    payroll_scratch.copy_from_slice(&head[0].try_borrow()?);
+    vault_scratch.copy_from_slice(&head[1].try_borrow()?);
+    let public = proved_allowance(&payroll_scratch, &vault_scratch, now).map_err(map_error)?;
+    pay_vk::Verifier {
+        proof: &proof,
+        public_inputs: pay_vk::PublicInputs {
+            index: public.index,
+            due: public.due,
+            installment: public.installment,
+            payee: public.payee,
+        },
+        private_tx_hash: tx_hash,
+        transfers: &[],
+    }
+    .verify()
+    .map_err(|_| map_error(PayrollError::ProofRejected))?;
+    let payroll_addr = *head[0].address().as_array();
+    let (pda, bump) = Address::find_program_address(&[PAYROLL_NOTE_SEED, &payroll_addr], program_id);
+    let bump_byte = [bump];
+    let seeds = [
+        pinocchio::cpi::Seed::from(PAYROLL_NOTE_SEED),
+        pinocchio::cpi::Seed::from(&payroll_addr),
+        pinocchio::cpi::Seed::from(&bump_byte),
+    ];
+    invoke_one(spp, transact, &pda, &seeds)?;
+    let move_ix = parse_pool_move(rest).map_err(map_error)?;
+    allowance(
+        &mut payroll_scratch,
+        &vault_scratch,
+        &employer,
+        now,
+        Some(&SPP_ID),
+        move_ix,
+        &mut |_| Ok(()),
+    )
+    .map_err(map_error)?;
+    accounts[0].try_borrow_mut()?.copy_from_slice(&payroll_scratch);
     Ok(())
 }
 
