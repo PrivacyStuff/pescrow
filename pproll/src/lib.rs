@@ -25,8 +25,9 @@ pub use circuits::{
 
 pub use error::PayrollError;
 pub use pool::{
-    approve_payroll, deposit, initiate, join, open_payroll, open_vault, pay, reclaim, stop_payroll,
-    withdraw, InitiateMove, PoolMove, ProvedInitiate, ProvedPay, ProvedReclaim, ProvedVault,
+    allowance, approve_payroll, deposit, initiate, join, open_payroll, open_vault, pay, reclaim,
+    stop_payroll, withdraw, InitiateMove, PoolMove, ProvedInitiate, ProvedPay, ProvedReclaim,
+    ProvedVault,
     INITIATE_HEADER, OPEN_PAYROLL_IX_LEN, PAYROLL_NOTE_SEED, POOL_SEED,
 };
 pub use processor::address_limbs;
